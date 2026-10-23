@@ -5,18 +5,22 @@
 //! and deviation; it does not interpret either as churn on its own.
 
 pub mod adapter;
+pub mod analysis;
 pub mod historical;
 pub mod market;
 pub mod market_store;
 pub mod model;
+pub mod stats;
 
 pub use adapter::{LoadReport, PgAdapter};
-pub use model::Dataset;
+pub use model::{ClientFeatures, Dataset};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+    #[error("migration error: {0}")]
+    Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("failed to read dataset: {0}")]
     Io(#[from] std::io::Error),
     #[error("invalid dataset JSON: {0}")]
