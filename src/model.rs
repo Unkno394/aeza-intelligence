@@ -111,3 +111,22 @@ impl Dataset {
         Ok(serde_json::from_slice(&raw)?)
     }
 }
+
+/// One row of `public.client_features(as_of, horizon)`; see migration 007 for definitions.
+#[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+#[sqlx(rename_all = "camelCase")]
+pub struct ClientFeatures {
+    pub account_id: i64,
+    pub email: String,
+    pub services_count: i64,
+    pub monthly_spend: f64,
+    pub short_term_share: Option<f64>,
+    pub no_auto_prolong_share: Option<f64>,
+    pub prolong_wait_share: Option<f64>,
+    pub failed_prolong_share: Option<f64>,
+    pub expiring_revenue_share: Option<f64>,
+    pub upcoming_payments: i64,
+    pub spendable_balance: i64,
+    pub payment_coverage: f64,
+}

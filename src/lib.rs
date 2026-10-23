@@ -1,8 +1,10 @@
 pub mod adapter;
+pub mod analysis;
 pub mod model;
+pub mod stats;
 
 pub use adapter::{LoadReport, PgAdapter};
-pub use model::Dataset;
+pub use model::{ClientFeatures, Dataset};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -2,13 +2,15 @@
 
 use std::time::Instant;
 
+use chrono::{DateTime, Utc};
+
 use serde_json::json;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Transaction as PgTx};
 
 use crate::Error;
-use crate::model::{Account, Dataset, Service, Transaction};
+use crate::model::{Account, ClientFeatures, Dataset, Service, Transaction};
 
 /// `migrations/`, embedded at compile time.
 pub static MIGRATOR: Migrator = sqlx::migrate!();
@@ -55,6 +57,22 @@ impl PgAdapter {
     pub async fn rollback(&self, target: i64) -> Result<(), Error> {
         MIGRATOR.undo(&self.pool, target).await?;
         Ok(())
+    }
+
+    /// Risk feature vector of every account as of `as_of`, looking `horizon` ahead
+    /// (a PostgreSQL interval such as `7 days`).
+    pub async fn client_features(
+        &self,
+        as_of: DateTime<Utc>,
+        horizon: &str,
+    ) -> Result<Vec<ClientFeatures>, Error> {
+        Ok(
+            sqlx::query_as("SELECT * FROM public.client_features($1, $2::interval)")
+                .bind(as_of)
+                .bind(horizon)
+                .fetch_all(&self.pool)
+                .await?,
+        )
     }
 
     /// Loads the dataset in a single transaction, with the same guarantees as `002_seed.sql`:
