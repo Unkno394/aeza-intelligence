@@ -76,3 +76,10 @@ must come from separate evidence.
 The library provides JSON export and import, while the application chooses
 where to store that JSON. The current repository has no customer data source,
 Snapshot Model, or storage adapter.
+
+## Market Intelligence
+
+The [Wayback collector](docs/market-intelligence-wayback.md) and
+[PostgreSQL migration](migrations/001_market_intelligence.sql) support four
+providers and three tables in the existing database. A database connection is
+required to apply the migration and verify persisted observations.
