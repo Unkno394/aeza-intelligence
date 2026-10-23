@@ -1,13 +1,17 @@
-//! PostgreSQL adapter: applies the schema and bulk-loads a [`Dataset`].
+//! PostgreSQL adapter: runs migrations and bulk-loads a [`Dataset`].
 
+use std::time::Instant;
+
+use serde_json::json;
+use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Transaction as PgTx};
 
 use crate::Error;
 use crate::model::{Account, Dataset, Service, Transaction};
 
-/// `scripts/001_schema.sql`, embedded so the binary doesn't depend on the working directory.
-pub const SCHEMA_SQL: &str = include_str!("../scripts/001_schema.sql");
+/// `migrations/`, embedded at compile time.
+pub static MIGRATOR: Migrator = sqlx::migrate!();
 
 /// Rows per `INSERT ... SELECT FROM UNNEST(...)` statement.
 const CHUNK_SIZE: usize = 10_000;
@@ -41,17 +45,65 @@ impl PgAdapter {
         &self.pool
     }
 
-    /// Creates enum types, tables and indexes if they don't exist yet.
-    pub async fn apply_schema(&self) -> Result<(), Error> {
-        sqlx::raw_sql(SCHEMA_SQL).execute(&self.pool).await?;
+    /// Applies pending migrations; already applied ones are skipped.
+    pub async fn migrate(&self) -> Result<(), Error> {
+        MIGRATOR.run(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Reverts applied migrations newer than `target` (0 reverts everything).
+    pub async fn rollback(&self, target: i64) -> Result<(), Error> {
+        MIGRATOR.undo(&self.pool, target).await?;
         Ok(())
     }
 
     /// Loads the dataset in a single transaction, with the same guarantees as `002_seed.sql`:
     /// the tables are locked, must be empty, and identity sequences are advanced past the
-    /// loaded ids. On any error nothing is written.
+    /// loaded ids. On any error no data is written.
+    ///
+    /// Every inserted row is logged by the database triggers under one `requestId`, together
+    /// with a `bulk_load` summary entry; a failed load leaves only a `failure` entry.
     pub async fn load(&self, data: &Dataset) -> Result<LoadReport, Error> {
+        let request_id: String = sqlx::query_scalar("SELECT gen_random_uuid()::text")
+            .fetch_one(&self.pool)
+            .await?;
+        let started = Instant::now();
+
+        let result = self.load_in_tx(data, &request_id, started).await;
+        if let Err(err) = &result {
+            let metadata = json!({
+                "accounts": data.accounts.len(),
+                "services": data.services.len(),
+                "transactions": data.transactions.len(),
+            });
+            // The load error is what the caller needs; failing to log it must not replace it.
+            let _ = log_bulk_load(
+                &self.pool,
+                &request_id,
+                started,
+                Some(&err.to_string()),
+                &metadata,
+            )
+            .await;
+        }
+        result
+    }
+
+    async fn load_in_tx(
+        &self,
+        data: &Dataset,
+        request_id: &str,
+        started: Instant,
+    ) -> Result<LoadReport, Error> {
         let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            "SELECT set_config('app.actor_type', 'system', true),
+                    set_config('app.request_id', $1, true)",
+        )
+        .bind(request_id)
+        .execute(&mut *tx)
+        .await?;
 
         sqlx::query(
             "LOCK TABLE public.accounts, public.services, public.transactions IN EXCLUSIVE MODE",
@@ -85,15 +137,47 @@ impl PgAdapter {
             sync_id_sequence(&mut tx, table).await?;
         }
 
+        let metadata = json!({
+            "accounts": report.accounts,
+            "services": report.services,
+            "transactions": report.transactions,
+        });
+        log_bulk_load(&mut *tx, request_id, started, None, &metadata).await?;
+
         tx.commit().await?;
         Ok(report)
     }
 }
 
+async fn log_bulk_load<'e, E>(
+    executor: E,
+    request_id: &str,
+    started: Instant,
+    error: Option<&str>,
+    metadata: &serde_json::Value,
+) -> Result<(), Error>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
+    let duration_ms = i32::try_from(started.elapsed().as_millis()).unwrap_or(i32::MAX);
+    sqlx::query(
+        r#"INSERT INTO public.operation_logs ("actorType", action, outcome, error, "durationMs", "requestId", metadata)
+           VALUES ('system', 'bulk_load', $1, $2, $3, $4::uuid, $5::jsonb)"#,
+    )
+    .bind(if error.is_some() { "failure" } else { "success" })
+    .bind(error)
+    .bind(duration_ms)
+    .bind(request_id)
+    .bind(metadata.to_string())
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
 async fn insert_accounts(tx: &mut PgTx<'_, Postgres>, rows: &[Account]) -> Result<u64, Error> {
     let result = sqlx::query(
         r#"INSERT INTO public.accounts ("id", "email", "balance", "withdrawBalance", "totalReplenished", "bonusBalance", "bonusState")
-           SELECT * FROM UNNEST($1::int4[], $2::text[], $3::int8[], $4::int8[], $5::int8[], $6::int8[], $7::public.bonus_state[])"#,
+           SELECT * FROM UNNEST($1::int8[], $2::text[], $3::int8[], $4::int8[], $5::int8[], $6::int8[], $7::text[])"#,
     )
     .bind(rows.iter().map(|r| r.id).collect::<Vec<_>>())
     .bind(rows.iter().map(|r| r.email.as_str()).collect::<Vec<_>>())
@@ -110,7 +194,7 @@ async fn insert_accounts(tx: &mut PgTx<'_, Postgres>, rows: &[Account]) -> Resul
 async fn insert_services(tx: &mut PgTx<'_, Postgres>, rows: &[Service]) -> Result<u64, Error> {
     let result = sqlx::query(
         r#"INSERT INTO public.services ("id", "name", "ownerId", "paymentTerm", "autoProlong", "createdAt", "expiresAt", "status", "price")
-           SELECT * FROM UNNEST($1::int4[], $2::text[], $3::int4[], $4::public.payment_term[], $5::bool[], $6::timestamptz[], $7::timestamptz[], $8::public.service_status[], $9::int8[])"#,
+           SELECT * FROM UNNEST($1::int8[], $2::text[], $3::int8[], $4::text[], $5::bool[], $6::timestamptz[], $7::timestamptz[], $8::text[], $9::int8[])"#,
     )
     .bind(rows.iter().map(|r| r.id).collect::<Vec<_>>())
     .bind(rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>())
@@ -132,7 +216,7 @@ async fn insert_transactions(
 ) -> Result<u64, Error> {
     let result = sqlx::query(
         r#"INSERT INTO public.transactions ("id", "amount", "status", "performedAt", "createdAt", "type", "serviceId")
-           SELECT * FROM UNNEST($1::int4[], $2::int8[], $3::public.transaction_status[], $4::timestamptz[], $5::timestamptz[], $6::public.transaction_type[], $7::int4[])"#,
+           SELECT * FROM UNNEST($1::int8[], $2::int4[], $3::text[], $4::timestamptz[], $5::timestamptz[], $6::text[], $7::int8[])"#,
     )
     .bind(rows.iter().map(|r| r.id).collect::<Vec<_>>())
     .bind(rows.iter().map(|r| r.amount).collect::<Vec<_>>())

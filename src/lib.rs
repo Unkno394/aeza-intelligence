@@ -8,6 +8,8 @@ pub use model::Dataset;
 pub enum Error {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+    #[error("migration error: {0}")]
+    Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("failed to read dataset: {0}")]
     Io(#[from] std::io::Error),
     #[error("invalid dataset JSON: {0}")]

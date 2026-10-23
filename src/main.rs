@@ -4,7 +4,7 @@ use aeza_intelligence::{Dataset, PgAdapter};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 
-/// Loads fixture data into PostgreSQL.
+/// Manages the database schema and loads fixture data into PostgreSQL.
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
@@ -18,15 +18,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create enum types, tables and indexes (idempotent).
-    Schema,
+    /// Apply pending migrations from migrations/.
+    Migrate,
+    /// Revert applied migrations newer than --to (default: all of them).
+    Rollback {
+        #[arg(long, default_value_t = 0)]
+        to: i64,
+    },
     /// Load a data.json produced by scripts/generate.py into empty tables.
     Load {
         #[arg(default_value = "scripts/data.json")]
         path: PathBuf,
-        /// Apply the schema before loading.
+        /// Apply pending migrations before loading.
         #[arg(long)]
-        with_schema: bool,
+        migrate: bool,
     },
 }
 
@@ -38,15 +43,19 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to connect to PostgreSQL")?;
 
     match cli.command {
-        Command::Schema => {
-            adapter.apply_schema().await?;
-            println!("Schema applied");
+        Command::Migrate => {
+            adapter.migrate().await?;
+            println!("Migrations applied");
         }
-        Command::Load { path, with_schema } => {
+        Command::Rollback { to } => {
+            adapter.rollback(to).await?;
+            println!("Rolled back to version {to}");
+        }
+        Command::Load { path, migrate } => {
             let data = Dataset::from_path(&path)
                 .with_context(|| format!("failed to load {}", path.display()))?;
-            if with_schema {
-                adapter.apply_schema().await?;
+            if migrate {
+                adapter.migrate().await?;
             }
             let report = adapter.load(&data).await?;
             println!(

@@ -1,0 +1,53 @@
+# One PostgreSQL database with accounts, services, transactions, admins and operation logs.
+# The schema lives in migrations/ and is applied by the `migrate` service on every
+# `docker compose up`; already applied migrations are skipped.
+#
+#   docker compose up -d --wait                 # database + migrations
+#   docker compose run --rm seed                # load scripts/data.json into empty tables
+#   docker compose down -v                      # stop and drop the data
+
+name: aeza-intelligence
+
+x-app: &app
+  build: .
+  image: aeza-intelligence:latest
+  environment:
+    DATABASE_URL: postgres://${DB_USER:-aeza}:${DB_PASSWORD:-aeza}@db:5432/${DB_NAME:-aeza}
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-aeza}
+      POSTGRES_USER: ${DB_USER:-aeza}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-aeza}
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  seed:
+    <<: *app
+    profiles: ["seed"]
+    command: ["load", "/data/data.json"]
+    volumes:
+      - ./scripts:/data:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  db-data:
