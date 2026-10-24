@@ -1,32 +1,96 @@
-export type GeoInterest={brandCode:string;source:string;regionCode:string;regionName:string;latitude:number|null;longitude:number|null;periodStart:string;periodEnd:string;score:number};
+import {useMemo,useState} from 'react';
+import {geoNaturalEarth1,geoPath} from 'd3-geo';
+import geoCsv from '../data/geoMap.csv?raw';
+import world from '../data/world.json';
+import countryCodes from '../data/countryCodes.json';
 
-const land=[
- 'M71 82 114 53 166 48 196 66 209 95 242 106 253 143 226 167 199 158 181 183 151 186 135 165 102 154 87 128 62 114Z',
- 'M183 190 213 197 233 224 234 270 256 294 247 327 222 370 207 359 199 318 181 289 177 242Z',
- 'M310 72 334 53 369 59 386 76 379 97 357 104 340 90Z',
- 'M380 124 415 105 462 98 489 114 504 141 488 166 464 172 454 203 431 224 402 205 395 170 373 151Z',
- 'M486 80 540 58 606 54 646 66 688 53 747 59 802 79 839 107 829 138 803 153 765 145 740 176 709 173 686 201 651 191 629 162 594 154 569 182 542 163 518 141 490 119Z',
- 'M700 252 739 232 790 233 817 253 833 286 803 309 755 311 720 293Z',
- 'M835 311 849 307 854 322 844 337 835 328Z',
- 'M450 339 503 329 548 340 594 347 637 341 684 351 712 373 667 393 602 395 545 389 484 394 433 378Z'
-];
+const brands=[
+ {code:'aeza',name:'Aéza',color:'#ce514d'},
+ {code:'hetzner',name:'Hetzner',color:'#6198ec'},
+ {code:'contabo',name:'Contabo',color:'#e5ad48'},
+ {code:'timeweb_cloud',name:'Timeweb Cloud',color:'#69ba9b'},
+ {code:'selectel',name:'Selectel',color:'#a582d8'}
+] as const;
+type Country={code:string;name:string;scores:number[];winner:number};
 
-function coordinate(latitude:number,longitude:number){return {x:(longitude+180)/360*900,y:(90-latitude)/180*450};}
+const aliases:Record<string,string>={
+ 'Фолклендские (Мальвинские) о-ва':'FK',
+ 'Гонконг':'HK',
+ 'Макао':'MO',
+ 'Палестина':'PS',
+ 'Бонэйр, Синт-Эстатиус и Саба':'BQ'
+ ,'Виргинские о-ва (Великобритания)':'VG'
+ ,'о-в Св. Елены':'SH'
+};
 
-export default function GeoMap({points,brand,brandName}:{points:GeoInterest[];brand:string;brandName:string}){
- const latest=points.filter(point=>point.brandCode===brand).reduce((value,point)=>point.periodEnd>value?point.periodEnd:value,'');
- const visible=points.filter(point=>point.periodEnd===latest&&point.brandCode===brand&&Number.isFinite(point.latitude)&&Number.isFinite(point.longitude)&&Number.isFinite(point.score));
- const ranked=points.filter(point=>point.periodEnd===latest&&point.brandCode===brand).sort((a,b)=>b.score-a.score).slice(0,5);
- return <div className="market-map-layout"><div className="market-map-wrap">
- <svg className="market-map" viewBox="0 0 900 450" role="img" aria-label={visible.length?`Карта относительного интереса: ${visible.length} регионов`:'Карта ожидает географические данные'}>
- <defs><radialGradient id="market-sea"><stop stopColor="#153b57"/><stop offset="1" stopColor="#081a2d"/></radialGradient><radialGradient id="market-dot"><stop stopColor="#d9f5ff"/><stop offset=".38" stopColor="#9ddcff"/><stop offset="1" stopColor="#4fa9e8"/></radialGradient></defs>
- <rect width="900" height="450" rx="18" fill="url(#market-sea)"/>
- {[90,180,270,360].map(y=><path key={`h${y}`} d={`M0 ${y}H900`} stroke="#b9e4ff" strokeOpacity=".08"/>)}
- {[150,300,450,600,750].map(x=><path key={`v${x}`} d={`M${x} 0V450`} stroke="#b9e4ff" strokeOpacity=".08"/>)}
- {land.map((d,index)=><path key={index} d={d} fill="#31576c" fillOpacity=".78" stroke="#80b7cc" strokeOpacity=".35" strokeWidth="1.5"/>)}
- {visible.map(point=>{const {x,y}=coordinate(point.latitude!,point.longitude!);const radius=5+Math.sqrt(Math.max(0,Math.min(100,point.score))/100)*17;return <g key={`${point.regionCode}-${point.periodStart}`}><circle cx={x} cy={y} r={radius+7} fill="#75c8ff" opacity=".11"/><circle cx={x} cy={y} r={radius} fill="url(#market-dot)" opacity=".86" stroke="#e2f6ff" strokeWidth="1.4"><title>{`${point.regionName}: ${point.score.toFixed(1)} / 100`}</title></circle></g>;})}
- </svg>
- {!ranked.length&&<div className="market-map-empty"><strong>Нет данных по странам для {brandName}</strong><span>Загрузите CSV «Interest by region» из совместного сравнения Google Trends. TrendsMCP возвращает временной ряд без географии.</span></div>}
- </div><aside className="market-map-aside"><div className="market-map-label">{ranked.length?'GOOGLE TRENDS · ОТНОСИТЕЛЬНЫЙ ИНТЕРЕС':'ОТНОСИТЕЛЬНЫЙ ИНТЕРЕС'}</div><p>Размер круга соответствует индексу 0–100 из одного сравнения пяти брендов.</p>{latest&&<small>Период до {latest}</small>}
- {ranked.length?<ol>{ranked.map(point=><li key={point.regionCode}><span>{point.regionName}</span><b>{point.score.toFixed(0)}</b></li>)}</ol>:<div className="market-map-placeholder">После импорта CSV здесь появятся страны и их индексы.</div>}</aside></div>;
+function csvRows(text:string):string[][]{
+ const rows:string[][]=[];let row:string[]=[],cell='',quoted=false;
+ for(let i=0;i<text.length;i++){
+  const char=text[i];
+  if(char==='"'){
+   if(quoted&&text[i+1]==='"'){cell+='"';i++;}else quoted=!quoted;
+  }else if(char===','&&!quoted){row.push(cell.trim());cell='';}
+  else if((char==='\n'||char==='\r')&&!quoted){if(char==='\r'&&text[i+1]==='\n')i++;row.push(cell.trim());if(row.some(Boolean))rows.push(row);row=[];cell='';}
+  else cell+=char;
+ }
+ row.push(cell.trim());if(row.some(Boolean))rows.push(row);
+ return rows;
+}
+
+function parseGeoCsv(text:string):{countries:Country[];period:string}{
+ const rows=csvRows(text);
+ const headerIndex=rows.findIndex(row=>row[0]==='Страна'&&row.length===brands.length+1);
+ if(headerIndex<0)throw new Error('В geoMap.csv не найдена таблица стран для пяти брендов');
+ const header=rows[headerIndex];
+ brands.forEach((brand,index)=>{if(!header[index+1].toLocaleLowerCase('ru').includes(brand.code==='aeza'?'aeza':brand.name.toLocaleLowerCase('ru')))throw new Error(`Неверная колонка ${brand.name} в geoMap.csv`);});
+ const display=new Intl.DisplayNames(['ru'],{type:'region'});
+ const codes=new Map<string,string>();
+ for(let a=65;a<=90;a++)for(let b=65;b<=90;b++){
+  const code=String.fromCharCode(a,b),name=display.of(code);
+  if(name&&name!==code)codes.set(name.toLocaleLowerCase('ru'),code);
+ }
+ const countries:Country[]=[];
+ for(const row of rows.slice(headerIndex+1)){
+  if(row.length!==header.length||!row[0])continue;
+  const scores=row.slice(1).map(value=>{
+   const normalized=value.replace(/[\s\u00a0\u202f%]/g,'');
+   if(!normalized)return 0;
+   const score=Number(normalized.replace(',','.'));
+   return Number.isFinite(score)&&score>=0&&score<=100?score:0;
+  });
+  if(!scores.some(score=>score>0))continue;
+  const code=aliases[row[0]]??codes.get(row[0].toLocaleLowerCase('ru'));
+  if(!code)continue;
+  const winner=scores.indexOf(Math.max(...scores));
+  countries.push({code,name:row[0],scores,winner});
+ }
+ return {countries,period:header[1].match(/\(([^)]+)\)/)?.[1]??''};
+}
+
+const data=parseGeoCsv(geoCsv);
+
+export default function GeoMap({brand}:{brand:string}){
+ const selected=brands.findIndex(item=>item.code===brand);
+ const selectedIndex=selected<0?0:selected;
+ const [hovered,setHovered]=useState<Country|null>(null);
+ const byCode=useMemo(()=>new Map(data.countries.map(country=>[country.code,country])),[]);
+ const paths=useMemo(()=>{
+  const projection=geoNaturalEarth1().fitExtent([[18,24],[982,510]],world as never);
+  const path=geoPath(projection);
+  return world.features.map(feature=>({id:feature.id,shape:path(feature as never)??''}));
+ },[]);
+ const ranked=useMemo(()=>[...data.countries].filter(country=>country.scores[selectedIndex]>0).sort((a,b)=>b.scores[selectedIndex]-a.scores[selectedIndex]).slice(0,8),[selectedIndex]);
+ return <div className="market-map-layout"><div className="market-map-wrap market-country-map-wrap">
+  <svg className="market-country-map" viewBox="0 0 1000 540" role="img" aria-label={`Карта интереса к ${brands[selectedIndex].name} по странам`}>
+   <rect width="1000" height="540" fill="#0b1927"/>
+   {paths.map(({id,shape})=>{const country=byCode.get((countryCodes as Record<string,string>)[id]);const score=country?.scores[selectedIndex]??0;return <path key={id} d={shape} className={`market-country${score?' has-data':''}${hovered?.code===country?.code&&country?' is-hovered':''}`} fill={score?brands[selectedIndex].color:'#233547'} fillOpacity={score?0.28+0.72*Math.sqrt(score/100):1} onMouseEnter={()=>setHovered(country??null)} onMouseLeave={()=>setHovered(null)}><title>{country?`${country.name}: ${brands[selectedIndex].name} ${score}%`:id}</title></path>})}
+  </svg>
+  {hovered&&<div className="market-map-tooltip"><strong>{hovered.name}</strong><span>{brands[selectedIndex].name}: {hovered.scores[selectedIndex]}%</span><small>Лидер: {brands[hovered.winner].name} · {hovered.scores[hovered.winner]}%</small></div>}
+ </div><aside className="market-map-aside">
+  <div className="market-map-label">GOOGLE TRENDS · ПОПУЛЯРНОСТЬ ПО РЕГИОНАМ</div>
+  <p>Чем ярче страна, тем выше доля {brands[selectedIndex].name} среди пяти запросов. Наведите на страну, чтобы увидеть её данные.</p>
+  <div className="market-map-legend"><span><i style={{background:brands[selectedIndex].color}}/>Доля {brands[selectedIndex].name}</span><span><i style={{background:'#233547'}}/>Нет данных</span></div>
+  {data.period&&<small>Период: {data.period}</small>}
+  <ol>{ranked.map(country=><li key={country.code}><span>{country.name}</span><b>{country.scores[selectedIndex]}%</b></li>)}</ol>
+ </aside></div>;
 }

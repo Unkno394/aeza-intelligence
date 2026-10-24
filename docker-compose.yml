@@ -2,20 +2,20 @@
 #
 #   docker compose up -d --build        # then open http://127.0.0.1:8080
 #
-# Order: db → migrate → seed (scripts/data.json, skipped when clients exist) →
-# api, snapshots, market collectors, simulator → frontend (nginx on FRONTEND_PORT).
+# Order: existing PostgreSQL → migrate → seed (skipped when clients exist) →
+# api, snapshots, market collectors, simulator → frontend (FRONTEND_PORT).
 #
-# Database: the bundled `db` service, credentials default to aeza. Set DATABASE_URL
-# (or DB_USER, DB_PASSWORD, DB_NAME, DB_HOST, DB_PORT) to use another database.
+# DATABASE_URL points to the existing PostgreSQL on the Linux host.
 # Search interest is collected only when TRENDSMCP_API_KEY is set.
 
 name: aeza-intelligence
 
-x-database-url: &database-url ${DATABASE_URL:-postgres://${DB_USER:-aeza}:${DB_PASSWORD:-aeza}@${DB_HOST:-db}:${DB_PORT:-5432}/${DB_NAME:-aeza}}
+x-database-url: &database-url ${DATABASE_URL:?Set DATABASE_URL in .env}
 
 x-app: &app
   build: .
   image: aeza-intelligence:latest
+  network_mode: host
   environment:
     DATABASE_URL: *database-url
   depends_on:
@@ -23,29 +23,11 @@ x-app: &app
       condition: service_completed_successfully
 
 services:
-  db:
-    image: postgres:16
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${DB_USER:-aeza}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-aeza}
-      POSTGRES_DB: ${DB_NAME:-aeza}
-    ports:
-      - "${DB_PUBLISH_PORT:-5433}:5432"
-    volumes:
-      - db-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
   migrate:
     <<: *app
     command: ["migrate"]
-    depends_on:
-      db:
-        condition: service_healthy
+    depends_on: []
+    restart: on-failure
 
   seed:
     <<: *app
@@ -108,9 +90,8 @@ services:
     restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-8080}:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - api
       - simulator
-
-volumes:
-  db-data:

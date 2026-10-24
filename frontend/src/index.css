@@ -136,3 +136,21 @@ thead{background:#cdeaff06;border-color:#d5edff13}tbody tr:hover{background:#c5e
 .market-export-link{display:inline-block;margin-top:10px;color:#9cddff;font-size:11px;font-weight:600;text-decoration:underline;text-underline-offset:3px}
 @media(max-width:750px){.market-page{padding:12px}.market-empty-overview{align-items:flex-start;flex-direction:column}}
 @media(max-width:1100px){.market-page .market-brand-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:520px){.market-page .market-brand-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Geographic interest: dark dotted land and warm data markers. */
+.market-page .market-map-wrap{background:#080d13;border-color:#4f596344;box-shadow:inset 0 0 45px #0008}
+.market-page .market-map-empty{background:#0c1219e8;border-color:#ff684c40;box-shadow:0 16px 40px #0008}
+.market-page .market-map-empty strong{color:#ffe8dc}
+.market-page .market-map-aside{background:#0f171e;border-color:#5f6c753d}
+.market-page .market-map-aside li b{color:#ff9b72}
+.market-map-connections{display:block;margin-top:17px;line-height:1.6}
+.market-country-map-wrap{display:flex;align-items:center;justify-content:center;min-height:420px;background:#0b1927!important}
+.market-country-map{display:block;width:100%;height:auto;aspect-ratio:1000/540}
+.market-country{stroke:#547088;stroke-width:.65;vector-effect:non-scaling-stroke;transition:fill-opacity .18s,stroke .18s}
+.market-country.has-data{cursor:pointer}.market-country.has-data:hover,.market-country.is-hovered{stroke:#e7f6ff;stroke-width:1.5;fill-opacity:1}
+.market-map-tooltip{position:absolute;left:16px;bottom:16px;display:grid;gap:5px;padding:12px 15px;border:1px solid #7894a876;border-radius:9px;background:#101e2df0;color:#eef7ff;box-shadow:0 8px 28px #0007;pointer-events:none;font-size:12px}
+.market-map-tooltip span{color:#e7f3fb}.market-map-tooltip small{color:#9cb7c9;font-size:10px}
+.market-map-legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin:16px 0;color:#d2dee8;font-size:10px}
+.market-map-legend span{display:inline-flex;align-items:center;gap:6px}
+.market-map-legend i{display:inline-block;width:9px;height:9px;border-radius:2px}
+@media(max-width:750px){.market-country-map-wrap{min-height:260px}}

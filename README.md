@@ -8,18 +8,19 @@ payment behavior. No training data is required before the first observation.
 ## Quick start
 
 ```sh
+cp .env.example .env
+# Set DATABASE_URL in .env to the existing PostgreSQL on this host.
 docker compose up -d --build
 ```
 
-Open http://127.0.0.1:8080. Compose starts PostgreSQL (user, password and
-database `aeza`, published on host port 5433), applies migrations, loads
+Open http://127.0.0.1:8080. Compose uses the existing PostgreSQL, applies migrations, loads
 `scripts/data.json` when the client tables are empty, and runs the API, daily
 client snapshots, the competitor tariff and EUR→RUB collector (daily), the
-Market Simulator and the frontend behind nginx. Search interest is collected
+Market Simulator and the frontend HTTP server. Search interest is collected
 only when `TRENDSMCP_API_KEY` is set in `.env`; the Market Intelligence map
-needs a Google Trends CSV import (`google_trends_import`). Ports and credentials
-can be overridden in `.env` (see `.env.example`). `docker compose down -v`
-removes everything, including the data.
+includes a Google Trends regional CSV for the map. Ports and credentials
+can be overridden in `.env` (see `.env.example`). `docker compose down` stops
+the application containers; the existing database remains in place.
 
 ## Inputs
 
@@ -91,9 +92,30 @@ must come from separate evidence.
 
 The library provides JSON export and import for historical profiles. The
 PostgreSQL adapter loads customer datasets and computes current risk features;
-historical profile persistence still needs an application integration.
+`client_snapshot` persists daily historical assessments in PostgreSQL.
 
 ## Market Intelligence
+
+### Check both client models with generated data
+
+`scripts/check_models.sh` uses the Python generator to create 10 fake clients
+and 60 dated feature snapshots in a temporary directory. It runs both Rust
+models without a database and checks that Snapshot analysis returns all clients,
+Historical becomes confident after enough history, and the final behavior
+change for the first fixture account is detected.
+
+Run `bash scripts/check_models.sh` for the offline check. The optional
+`bash scripts/check_models.sh --persist` adds 10 fixture clients with negative
+IDs to the existing PostgreSQL database, writes 60 historical snapshots for
+each, checks stored rows and the Rust analysis, Risk Score and Historical HTTP
+routes, runs the daily collector twice to check for duplicates, simulates two
+UTC days for one fixture account with `--as-of`, then opens
+Dashboard, Snapshot and Historical in headless Chromium and compares their
+Risk Score with the Rust API.
+Existing positive client IDs and identity sequences remain unchanged. The
+script refuses to reuse a negative ID owned by a non-fixture record. The
+Snapshot page requests its Risk Score from `POST /api/client/snapshot`; the
+Historical page reads persisted daily state.
 
 ### One PostgreSQL database
 
@@ -103,8 +125,7 @@ run `bash scripts/migrate_database.sh`. This applies the market migrations
 database. Customer tables live in `public`; market tables live in
 `market_intelligence`. The script verifies that all required tables exist and
 prints row counts. It does not create or replace a database. Docker Compose
-runs its own PostgreSQL service unless `DATABASE_URL` (or `DB_*`) points
-elsewhere; see [Quick start](#quick-start).
+uses the same `DATABASE_URL`; see [Quick start](#quick-start).
 
 The client schema compatibility step recognises the former `scripts/001_schema.sql`
 tables, checks their required columns and converts their enum fields to text
@@ -162,9 +183,13 @@ The CSV columns must be Aeza, Hetzner, Contabo, Timeweb Cloud, Selectel in
 that order. Both CSVs must come from the same comparison window, so their
 scores share a scale.
 
-The Market Intelligence map reads geography from the CSV import. The active
-time-series chart still reads the separate TrendsMCP series. Google's official
-Trends API remains restricted to alpha testers.
+The Market Intelligence map uses the bundled `frontend/src/data/geoMap.csv`
+(comparison of five brands, 24 October 2025–24 October 2026) to shade each
+country by the selected brand's share. The time-series chart reads the separate
+TrendsMCP series. The map geometry and CSV are bundled locally; it does not
+require a third-party chart script in the browser.
+The optional database importer still accepts paired timeline and geography
+exports. Google's official Trends API remains restricted to alpha testers.
 
 The Market Intelligence frontend shows a selected brand's weekly trend,
 aggregated monthly values, and 7/30-day changes. The geography map shows
@@ -190,29 +215,30 @@ rates from Frankfurter without an API key, and exposes
 converted price `NULL`; the importer reports failed dates. Compare prices
 only for equivalent billing periods and VAT treatment.
 
-### Market API
+### Run and verify the system
 
-After the database and imports are ready, run `cargo run --bin market_api`.
-The server listens on `127.0.0.1:3000` by default and serves
-`/api/market/search-interest`, `/api/market/geography`, and
-`/api/market/prices`. The frontend Vite
-development server proxies `/api` to it. An empty response means no imported
-data; database failures return HTTP 500.
-
-For this workspace, a local PostgreSQL cluster was initialized in ignored
-`.local/postgres` with an `aeza_intelligence` database, and its schemas were
-applied. Start it outside a socket-restricted environment with:
+The Rust API listens on `127.0.0.1:3000` and serves the three Market routes
+plus client dataset, Rust analysis and historical snapshots. Vite proxies
+`/api` to that process. The client dashboard uses the PostgreSQL dataset;
+personal Risk Score settings remain in browser storage. Start the existing
+local cluster on the host if it is not already running:
 
 ```sh
 pg_ctl -D .local/postgres -o '-k /tmp -p 55432 -h 127.0.0.1' -l .local/postgres.log start
 set -a; . ./.env; set +a
-cargo run --bin market_import -- run --mode both
-cargo run --bin market_fx
-cargo run --bin search_interest -- once
+bash scripts/migrate_database.sh
+bash scripts/collect_market.sh
+bash scripts/collect_trends.sh
+cargo run --bin client_snapshot
 cargo run --bin market_api
 ```
 
-This local cluster has not accepted connections in the current sandbox, so
-the imports and API still require a runtime check.
+In another terminal, run `bash scripts/check_api.sh` to verify response counts,
+including the search series per brand. Then start the frontend with
+`cd frontend && npm run dev`. On Arch Linux, `docker compose up -d --build api
+snapshots` runs the API and daily snapshot scheduler against the same database;
+`docker compose --profile collectors up -d trends` additionally schedules
+TrendsMCP updates when `TRENDSMCP_API_KEY` is set.
 
-To populate tariffs separately, run `bash scripts/collect_market.sh`.
+This sandbox cannot connect to the host PostgreSQL or external APIs, so live
+row counts and HTTP responses must be checked in the host environment.

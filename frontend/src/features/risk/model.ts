@@ -2,8 +2,14 @@ import type {Account,Dataset,Settings,RiskResult} from '../../types';
 export function calculateRisk(account: Account, data: Dataset, config: Settings): RiskResult {
  const services=data.services.filter(s=>s.accountId===account.id&&s.status!=='cancelled');
  const tx=data.transactions.filter(t=>t.accountId===account.id);
- const upcoming=services.filter(s=>Date.parse(s.renewsAt)<=Date.parse(data.asOf)+config.renewalWindowDays*86400000);
- const upcomingCents=upcoming.reduce((sum,s)=>sum+s.priceCents,0);
+ const asOf=Date.parse(data.asOf),windowEnd=asOf+config.renewalWindowDays*86400000;
+ const upcomingCents=services.reduce((sum,s)=>{
+  const renewalAt=Date.parse(s.renewsAt);
+  if(!Number.isFinite(renewalAt)||renewalAt>windowEnd)return sum;
+  const termMs=(s.paymentTermSeconds??30*86400)*1000;
+  const count=Number.isFinite(termMs)&&termMs>0?Math.max(1,Math.ceil((windowEnd-Math.max(renewalAt,asOf))/termMs)):1;
+  return sum+count*(s.renewalPriceCents??s.priceCents);
+ },0);
  const monthlyCents=services.reduce((sum,s)=>sum+s.priceCents,0);
  const recent=tx.filter(t=>Date.parse(t.createdAt)>=Date.parse(data.asOf)-30*86400000);
  const failures=recent.filter(t=>t.status==='failed').length;
