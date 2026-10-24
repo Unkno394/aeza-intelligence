@@ -213,7 +213,7 @@ cross-customer patterns are served by `GET /api/client/historical/patterns`.
 
 Set `DATABASE_URL` in `.env` to the existing `aeza_intelligence` database and
 run `bash scripts/migrate_database.sh`. This applies the market migrations
-(`001`–`004`) and the customer adapter migrations (`100`–`110`) to that same
+(`001`–`004`) and the customer adapter migrations (`100`–`114`) to that same
 database. Customer tables live in `public`; market tables live in
 `market_intelligence`. The script verifies that all required tables exist and
 prints row counts. It does not create or replace a database. Docker Compose

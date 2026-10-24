@@ -1770,7 +1770,7 @@ mod tests {
             expiring_revenue_share: Some(0.0),
             upcoming_payments: 0,
             spendable_balance: 0,
-            payment_coverage: 10.0,
+            payment_coverage: Some(10.0),
         };
         let settings = SnapshotSettings::default();
         let risks = |clients: &[ClientFeatures]| -> Risks {
