@@ -41,7 +41,7 @@ const RISK_FEATURES: [Feature; 5] = [
     Feature {
         name: "paymentCoverage",
         direction: -1.0,
-        value: |c| Some(c.payment_coverage),
+        value: |c| c.payment_coverage,
     },
 ];
 
@@ -290,7 +290,7 @@ mod tests {
             expiring_revenue_share: Some(0.1),
             upcoming_payments: 100,
             spendable_balance: (coverage * 100.0) as i64,
-            payment_coverage: coverage,
+            payment_coverage: Some(coverage),
         }
     }
 

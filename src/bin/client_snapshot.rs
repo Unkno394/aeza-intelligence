@@ -200,19 +200,20 @@ fn feature_map(client: &ClientFeatures) -> BTreeMap<String, f64> {
         ("services_count".into(), client.services_count as f64),
         ("monthly_spend".into(), client.monthly_spend),
         ("spendable_balance".into(), client.spendable_balance as f64),
-        ("payment_coverage".into(), client.payment_coverage),
         ("upcoming_payments".into(), client.upcoming_payments as f64),
     ]);
+    if let Some(coverage) = client.payment_coverage.filter(|value| value.is_finite()) {
+        values.insert("payment_coverage".into(), coverage);
+    }
     for (name, value) in [
         ("no_auto_prolong_share", client.no_auto_prolong_share),
         ("prolong_wait_share", client.prolong_wait_share),
         ("failed_prolong_share", client.failed_prolong_share),
         ("expiring_revenue_share", client.expiring_revenue_share),
     ] {
-        values.insert(
-            name.into(),
-            value.filter(|value| value.is_finite()).unwrap_or(0.0),
-        );
+        if let Some(value) = value.filter(|value| value.is_finite()) {
+            values.insert(name.into(), value);
+        }
     }
     values.retain(|_, value| value.is_finite());
     values
@@ -350,7 +351,9 @@ fn events_from_log(log: &OperationLog) -> Vec<ObservedEvent> {
                     Some("performed") => {
                         push_event(&mut events, log, stream.clone(), "prolong_succeeded")
                     }
-                    Some("not_performed") => push_event(&mut events, log, stream, "prolong_failed"),
+                    Some("not_performed") => {
+                        push_event(&mut events, log, stream, "prolong_outcome_unknown")
+                    }
                     _ => {}
                 }
             }
@@ -499,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_prolong_and_balance_top_up_are_recorded() {
+    fn unknown_prolong_outcome_and_balance_top_up_are_recorded_separately() {
         let prolong = log(
             "transaction",
             "create",
@@ -528,7 +531,7 @@ mod tests {
             Some(serde_json::json!({"balance":100,"totalReplenished":250})),
             None,
         );
-        assert_eq!(events_from_log(&prolong)[0].kind, "prolong_failed");
+        assert_eq!(events_from_log(&prolong)[0].kind, "prolong_outcome_unknown");
         assert_eq!(events_from_log(&top_up)[0].kind, "top_up");
         assert_eq!(events_from_log(&top_up_and_charge)[0].kind, "top_up");
         assert_eq!(

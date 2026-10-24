@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { ArrowUpRight, History } from 'lucide-react';
+import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { ArrowUpRight, CalendarDays, ChevronDown, CircleAlert, Clock3, History, Info } from 'lucide-react';
 import { useAnalyzer } from '../hooks/useAnalyzer';
 import { Empty, Panel } from '../components/common';
-import { Button } from '../components/ui/button';
 import { GlassSelect } from '../components/ui/GlassSelect';
+import './historical.css';
 
 type MetricDeviation = {
   lifetime_z_score: number | null;
@@ -81,6 +81,8 @@ type Assessment = {
 type HistoryPoint = { observedOn: string; assessment: Assessment; features: Record<string, number> };
 type SequencePeer = { accountId: number; similarity: number; sequence: string[] };
 type DiscoveredPattern = { sequence: string[]; support: number; supportRatio: number; clientIds: number[] };
+type TransitionEntry = Transition & { observedOn: string };
+type Period = 7 | 30 | 90;
 
 const metricNames: Record<string, string> = {
   services_count: 'Количество услуг', monthly_spend: 'Расходы в месяц',
@@ -89,15 +91,25 @@ const metricNames: Record<string, string> = {
   prolong_wait_share: 'В prolong_wait', failed_prolong_share: 'Неуспешные продления',
   expiring_revenue_share: 'Истекающая выручка',
 };
-const score = (value: number | null | undefined) => value == null ? '—' : `${value.toFixed(2)}σ`;
-const hours = (value: number) => `${(value / 3_600_000).toFixed(1)} ч`;
-const moment = (value: number) => new Date(value).toLocaleString('ru-RU');
 const featureValue = (key: string, value: number | null | undefined) => {
   if (value == null) return '—';
-  if (key.endsWith('_share')) return `${(value * 100).toFixed(1)}%`;
-  if (key === 'payment_coverage') return `${value.toFixed(2)}×`;
-  return value.toFixed(2);
+  if (key.endsWith('_share')) return (value * 100).toFixed(1) + '%';
+  if (key === 'payment_coverage') return value.toFixed(2) + '×';
+  return value.toLocaleString('ru-RU', { maximumFractionDigits: 2 });
 };
+const sigma = (value: number | null | undefined) => value == null ? '—' : value.toFixed(1) + 'σ';
+const percent = (value: number | null | undefined) => value == null ? '—' : Math.round(value * 100) + '%';
+const duration = (value: number) => value >= 86_400_000
+  ? Math.floor(value / 86_400_000) + ' д ' + Math.round(value % 86_400_000 / 3_600_000) + ' ч'
+  : (value / 3_600_000).toFixed(1) + ' ч';
+const eventDate = (value: number) => new Date(value).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' });
+const calendarDate = (value: string) => new Date(value + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
+const compactDate = (value: string) => new Date(value + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+const eventName = (value: string) => ({
+  active: 'Активна', suspended: 'Приостановлена', prolong_wait: 'Ожидает оплаты', deleted: 'Удалена',
+  blocked: 'Заблокирована', payment: 'Оплата', top_up: 'Пополнение', auto_renew_disabled: 'Автопродление выключено',
+} as Record<string, string>)[value] ?? value.replaceAll('_', ' ');
+const transitionList = (point: HistoryPoint): Transition[] => point.assessment.transitions ?? (point.assessment.transition ? [point.assessment.transition] : []);
 
 export default function Historical() {
   const { data, settings } = useAnalyzer();
@@ -108,13 +120,15 @@ export default function Historical() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [patternError, setPatternError] = useState('');
+  const [period, setPeriod] = useState<Period>(30);
+  const [selectedDate, setSelectedDate] = useState('');
   const account = data?.accounts.find(a => a.id === params.get('client')) ?? data?.accounts[0];
 
   useEffect(() => {
     const controller = new AbortController();
     fetch('/api/client/historical/patterns', { signal: controller.signal })
       .then(async response => {
-        if (!response.ok) throw new Error(`API: ${response.status}`);
+        if (!response.ok) throw new Error('API: ' + response.status);
         return response.json() as Promise<DiscoveredPattern[]>;
       })
       .then(setPatterns)
@@ -125,18 +139,18 @@ export default function Historical() {
   useEffect(() => {
     if (!account) { setPoints([]); setSequencePeers([]); return; }
     const controller = new AbortController();
-    setLoading(true); setError('');
-    fetch(`/api/client/historical/${account.id}`, { signal: controller.signal })
+    setLoading(true); setError(''); setSelectedDate('');
+    fetch('/api/client/historical/' + account.id, { signal: controller.signal })
       .then(async response => {
-        if (!response.ok) throw new Error(`API: ${response.status}`);
+        if (!response.ok) throw new Error('API: ' + response.status);
         return response.json() as Promise<HistoryPoint[]>;
       })
       .then(rows => setPoints(rows.sort((a, b) => a.observedOn.localeCompare(b.observedOn))))
       .catch(reason => { if (!controller.signal.aborted) setError(String(reason)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    fetch(`/api/client/historical/${account.id}/sequence-peers`, { signal: controller.signal })
+    fetch('/api/client/historical/' + account.id + '/sequence-peers', { signal: controller.signal })
       .then(async response => {
-        if (!response.ok) throw new Error(`API: ${response.status}`);
+        if (!response.ok) throw new Error('API: ' + response.status);
         return response.json() as Promise<SequencePeer[]>;
       })
       .then(setSequencePeers)
@@ -144,115 +158,150 @@ export default function Historical() {
     return () => controller.abort();
   }, [account?.id]);
 
-  const chart = useMemo(() => points.map(point => ({
-    date: point.observedOn,
-    anomaly: point.assessment.anomaly_score ?? 0,
-  })), [points]);
-  if (!data || !settings) return null;
   const latest = points.at(-1);
+  const chartPoints = useMemo(() => {
+    const latestTime = latest ? Date.parse(latest.observedOn) : 0;
+    return points.filter(point => Date.parse(point.observedOn) >= latestTime - period * 86_400_000)
+      .map(point => {
+        const metricScores = Object.values(point.assessment.metric_deviations ?? {}).map(item => item.score).filter((value): value is number => value != null);
+        const transitionScores = transitionList(point).map(item => item.elapsed_z_score).filter((value): value is number => value != null);
+        return { date: point.observedOn, anomaly: Math.max(0, ...metricScores, ...transitionScores) };
+      });
+  }, [points, latest, period]);
+  const selectedPoint = chartPoints.length
+    ? points.find(point => point.observedOn === selectedDate && chartPoints.some(row => row.date === point.observedOn)) ?? points.find(point => point.observedOn === chartPoints.at(-1)?.date)
+    : undefined;
+  const selectedChartScore = chartPoints.find(row => row.date === selectedPoint?.observedOn)?.anomaly ?? null;
   const assessment = latest?.assessment;
+  const selectedAssessment = selectedPoint?.assessment;
   const deviations = Object.entries(assessment?.metric_deviations ?? {});
-  const transitions = assessment?.transitions ?? [];
+  const transitions = assessment?.transitions ?? (assessment?.transition ? [assessment.transition] : []);
   const pendingStates = assessment?.pending_states ?? [];
   const sequenceMatches = assessment?.sequence_matches ?? [];
   const personalSequences = assessment?.personal_sequence_deviations ?? [];
   const anomalyReasons = assessment?.anomaly_reasons ?? [];
+  const selectedReasons = selectedAssessment?.anomaly_reasons ?? [];
+  const historyDays = points.length > 1 ? Math.floor((Date.parse(points.at(-1)!.observedOn) - Date.parse(points[0].observedOn)) / 86_400_000) + 1 : points.length ? 1 : 0;
+  const observationCounts = deviations.map(([, value]) => value.observations).filter(value => value > 0);
+  const minObservations = observationCounts.length ? Math.min(...observationCounts) : 0;
+  const maxObservations = observationCounts.length ? Math.max(...observationCounts) : 0;
+  const observationLabel = !observationCounts.length ? 'Нет наблюдений' : minObservations === maxObservations ? minObservations + ' на признак' : minObservations + '–' + maxObservations + ' на признак';
+  const accountPatterns = patterns.filter(pattern => pattern.clientIds.includes(Number(account?.id)));
+
+  const transitionHistory = useMemo(() => points.flatMap(point => transitionList(point).map(item => ({ ...item, observedOn: point.observedOn }))), [points]);
+  const transitionChains = useMemo(() => {
+    const grouped = new Map<string, TransitionEntry[]>();
+    transitionHistory.forEach(item => grouped.set(item.stream_id, [...(grouped.get(item.stream_id) ?? []), item]));
+    return Array.from(grouped.entries()).map(([streamId, entries]) => {
+      const states = entries.length ? [entries[0].from] : [];
+      entries.forEach(item => { if (states.at(-1) !== item.to) states.push(item.to); });
+      return { streamId, entries, states, latest: entries.at(-1)! };
+    }).sort((a, b) => b.latest.observedOn.localeCompare(a.latest.observedOn)).slice(0, 8);
+  }, [transitionHistory]);
 
   const anomalyStart = (feature: string) => {
     if (!latest || !assessment?.is_confident) return null;
     let index = points.length - 1;
-    const isAnomalous = (point: HistoryPoint) => point.assessment.is_confident
-      && (point.assessment.metric_deviations?.[feature]?.score ?? 0) >= 3;
-    if (!isAnomalous(latest)) return null;
-    while (index > 0 && isAnomalous(points[index - 1])) {
-      const gap = Date.parse(points[index].observedOn) - Date.parse(points[index - 1].observedOn);
-      if (gap > 2 * 86_400_000) break;
+    const anomalous = (point: HistoryPoint) => point.assessment.is_confident && (point.assessment.metric_deviations?.[feature]?.score ?? 0) >= 3;
+    if (!anomalous(latest)) return null;
+    while (index > 0 && anomalous(points[index - 1])) {
+      if (Date.parse(points[index].observedOn) - Date.parse(points[index - 1].observedOn) > 2 * 86_400_000) break;
       index -= 1;
     }
     return points[index].observedOn;
   };
 
-  return <>
-    <div className="page-heading">
-      <div><div className="eyebrow">ПОВЕДЕНЧЕСКАЯ АНАЛИТИКА</div><h1>Historical Model</h1><p>Личный профиль, переходы услуг и изменения относительно привычного поведения.</p></div>
-      <label className="client-select">Клиент<GlassSelect value={account?.id ?? ''} onChange={value => setParams({ client: value })} options={data.accounts.map(item => ({value:item.id,label:`${item.name} · ${item.id}`}))}/></label>
+  const mainChanges = (assessment?.familiarity ?? 0) >= 1 ? deviations.filter(([, value]) => (value.score ?? 0) >= 3)
+    .sort((a, b) => (b[1].score ?? 0) - (a[1].score ?? 0)).slice(0, 4) : [];
+
+  const checks = anomalyReasons.map((reason, index) => {
+    if (reason.kind === 'feature') {
+      const current = latest?.features[reason.subject];
+      const featureDeviation = latest?.assessment.metric_deviations?.[reason.subject];
+      const baseline = Math.abs(featureDeviation?.short_term_z_score ?? 0) >= Math.abs(featureDeviation?.long_term_z_score ?? 0) ? featureDeviation?.short_term_mean ?? featureDeviation?.long_term_mean : featureDeviation?.long_term_mean ?? featureDeviation?.short_term_mean;
+      return { key: reason.kind + reason.subject + index, title: 'Проверить: ' + (metricNames[reason.subject] ?? reason.subject), detail: 'Сейчас ' + featureValue(reason.subject, current) + ' · личная норма ' + featureValue(reason.subject, baseline) + ' · ' + sigma(reason.score) + ' от нормы.', href: '/snapshot?client=' + account?.id, link: 'Открыть услуги и платежи' };
+    }
+    if (reason.kind === 'pending_state') {
+      const pending = pendingStates.find(item => reason.subject.includes(item.state) && reason.subject.includes(item.expected_next_event));
+      return { key: reason.kind + reason.subject + index, title: 'Проверить ожидание услуги' + (pending ? ' ' + pending.stream_id : ''), detail: (pending ? eventName(pending.state) + ' уже ' + duration(pending.waiting_ms) + ' · обычно ' + duration(pending.typical_wait_ms) : reason.subject) + '. Это сигнал сверить текущее состояние услуги.', href: '#history-transitions', link: 'Переходы услуг' };
+    }
+    if (reason.kind === 'transition') {
+      const transition = transitionHistory.slice().reverse().find(item => (item.from + ' → ' + item.to) === reason.subject);
+      return { key: reason.kind + reason.subject + index, title: 'Проверить переход' + (transition ? ' услуги ' + transition.stream_id : ''), detail: reason.subject + (transition ? ' · время ' + duration(transition.elapsed_ms) + (transition.expected_elapsed_ms == null ? '' : ' · обычно ' + duration(transition.expected_elapsed_ms)) : '') + '. Необычность перехода не объясняет его причину.', href: '#history-transitions', link: 'История переходов' };
+    }
+    return { key: reason.kind + reason.subject + index, title: 'Проверить последовательность услуги ' + reason.subject, detail: 'Текущая цепочка отличается от прежних окон. Сверьте события этой услуги с журналом.', href: '#history-advanced', link: 'Анализ последовательностей' };
+  }).slice(0, 4);
+
+  if (!data || !settings) return null;
+  if (!account) return <Empty icon={<History size={30} />} title="Нет клиентов">Добавьте аккаунты через API для анализа истории.</Empty>;
+
+  return <div className="historical-page">
+    <div className="page-heading historical-heading">
+      <div><div className="eyebrow">ПОВЕДЕНЧЕСКАЯ АНАЛИТИКА</div><h1>Historical Model</h1><p>Что изменилось у клиента, насколько это необычно и что стоит проверить.</p></div>
+      <label className="client-select">Клиент<GlassSelect value={account.id} onChange={value => setParams({ client: value })} options={data.accounts.map(item => ({ value: item.id, label: item.name + ' · ' + item.id }))} /></label>
     </div>
 
-    <Panel title="Исторический анализ" subtitle={account?.email ?? 'Нет аккаунтов'} action={<span className={`badge ${assessment?.is_confident ? 'low' : 'medium'}`}>
-      {assessment?.is_confident ? 'Истории достаточно' : 'Сначала Snapshot Model'}
-    </span>}>
-      {loading ? <p>Загружаем историю…</p> : error ? <div className="error-box" role="alert">История не загрузилась: {error}</div> : points.length === 0
-        ? <Empty icon={<History size={30} />} title="Снимков пока нет">Ежедневный сбор сохраняет историю в PostgreSQL. Граф переходов пополняется событиями из operation_logs.</Empty>
-        : <>
-          <div className="history-progress"><span>Снимки</span><strong>{points.length} / {settings.historicalMinDays} дней</strong><div style={{ width: `${Math.min(100, points.length / settings.historicalMinDays * 100)}%` }} /></div>
-          <p className="body-note">Последний снимок: {latest?.observedOn}. Знакомство с профилем: {Math.round((assessment?.familiarity ?? 0) * 100)}%; событийная история: {Math.round((assessment?.event_familiarity ?? 0) * 100)}%. {assessment?.is_confident ? (assessment.is_unusual ? 'Найдено отклонение от личной нормы.' : 'Выраженного отклонения нет.') : 'Истории пока недостаточно для уверенных выводов; используется Snapshot Model.'}</p>
-          <div style={{ height: 260, width: '100%' }}><ResponsiveContainer><LineChart data={chart}><CartesianGrid stroke="#a9dfff1b" vertical={false} /><XAxis dataKey="date" tick={{ fill: '#9bb7c9', fontSize: 11 }} /><YAxis tick={{ fill: '#9bb7c9', fontSize: 11 }} /><Tooltip contentStyle={{ background: '#142d42', color: '#e9f7ff' }} /><Line type="monotone" dataKey="anomaly" name="Отклонение от профиля" stroke="#9edcff" strokeWidth={2} dot={{ r: 3 }} /></LineChart></ResponsiveContainer></div>
-        </>}
-      {account && <div className="empty-action"><Button asChild variant="default"><Link to={`/snapshot?client=${account.id}`}>Текущий анализ <ArrowUpRight size={15} /></Link></Button></div>}
+    <section className="historical-summary" aria-label="Сводка истории клиента">
+      <article className={'historical-summary-card historical-status ' + (assessment?.is_confident ? assessment.is_unusual ? 'is-unusual' : 'is-normal' : 'is-limited')}>
+        <small>Статус поведения</small><strong>{!assessment ? 'Истории пока нет' : !assessment.is_confident ? 'Недостаточно истории для вывода' : assessment.is_unusual ? 'Есть отклонения' : 'Выраженных отклонений нет'}</strong>
+        <span>{assessment?.is_confident ? 'Статус рассчитан по личной истории клиента.' : 'Оценка числовой и событийной истории показана отдельно.'}</span>
+      </article>
+      <article className="historical-summary-card"><small>Числовая история</small><strong>{percent(assessment?.familiarity)}</strong><span>{observationLabel} · снимков: {points.length}</span><div className="historical-meter"><i style={{ width: percent(assessment?.familiarity) }} /></div></article>
+      <article className="historical-summary-card"><small>Уверенность событийной модели</small><strong>{percent(assessment?.event_familiarity)}</strong><span>{transitionHistory.length} переходов зафиксировано в снимках</span><div className="historical-meter"><i style={{ width: percent(assessment?.event_familiarity) }} /></div></article>
+      <article className="historical-summary-card"><small>Снимки профиля</small><strong>{points.length}</strong><span>{latest ? 'Последний: ' + calendarDate(latest.observedOn) : 'Ожидается первый снимок'}</span></article>
+      <article className="historical-summary-card"><small>Длительность истории</small><strong>{historyDays} дн.</strong><span>{points.length > 1 ? calendarDate(points[0].observedOn) + ' — ' + calendarDate(points.at(-1)!.observedOn) : 'Накопление личной нормы'}</span></article>
+    </section>
+
+    <Panel title="Историческая аномальность" subtitle="Числовые отклонения от личной нормы · выберите точку, чтобы увидеть сигналы на эту дату" className="historical-chart-panel" action={<div className="historical-period-switch" role="group" aria-label="Период графика">{([7, 30, 90] as Period[]).map(value => <button type="button" key={value} aria-pressed={period === value} className={period === value ? 'active' : ''} onClick={() => setPeriod(value)}>{value} дней</button>)}</div>}>
+      {loading ? <p className="historical-empty-state">Загружаем историю клиента…</p> : error ? <p className="historical-empty-state is-error" role="alert">История не загрузилась: {error}</p> : chartPoints.length === 0 ? <p className="historical-empty-state">Снимков пока нет. График появится после накопления первой истории.</p> : <>
+        <div className="historical-chart"><ResponsiveContainer><LineChart data={chartPoints} margin={{ top: 14, right: 22, bottom: 6, left: 0 }} onClick={state => { const index = (state as unknown as { activeTooltipIndex?: number })?.activeTooltipIndex; if (typeof index === 'number' && chartPoints[index]) setSelectedDate(chartPoints[index].date); }}>
+          <CartesianGrid stroke="#a9dfff18" vertical={false} />
+          <XAxis dataKey="date" tickFormatter={(value: string) => compactDate(value)} minTickGap={24} tick={{ fill: '#8eabc0', fontSize: 10 }} axisLine={{ stroke: '#a9dfff22' }} tickLine={false} />
+          <YAxis domain={[0, (dataMax: number) => Math.max(dataMax, 3.5)]} tick={{ fill: '#8eabc0', fontSize: 10 }} axisLine={false} tickLine={false} width={38} />
+          <Tooltip labelFormatter={value => calendarDate(String(value))} formatter={value => [Number(value).toFixed(1) + 'σ', 'Отклонение числового профиля']} contentStyle={{ background: '#10283d', border: '1px solid #6ab9e533', borderRadius: 9, color: '#e4f4ff' }} />
+          <ReferenceLine y={3} stroke="#ff7778" strokeDasharray="5 5" label={{ value: 'Порог 3σ', position: 'insideTopRight', fill: '#ff8b8d', fontSize: 10 }} />
+          {selectedPoint && <ReferenceLine x={selectedPoint.observedOn} stroke="#7bc8f0" strokeDasharray="3 4" />}
+          <Line type="monotone" dataKey="anomaly" name="Аномальность" stroke="#67cefb" strokeWidth={2.4} dot={{ r: 3, fill: '#10283d', stroke: '#67cefb', strokeWidth: 2, cursor: 'pointer' }} activeDot={{ r: 6, fill: '#c4eeff', stroke: '#42b9f0', strokeWidth: 2 }} />
+        </LineChart></ResponsiveContainer></div>
+        {selectedPoint && <div className="historical-selected-point"><div className="historical-selected-heading"><div><small>Выбранная дата</small><strong>{calendarDate(selectedPoint.observedOn)}</strong></div><b className={selectedAssessment?.is_unusual ? 'is-unusual' : ''}>Числовое отклонение {sigma(selectedChartScore)} · {selectedAssessment?.is_unusual ? 'есть сигналы' : 'без выраженного отклонения'}</b></div>
+          {selectedReasons.length ? <div className="historical-point-reasons">{selectedReasons.slice(0, 4).map((reason, index) => <div key={reason.kind + reason.subject + index}><strong>{metricNames[reason.subject] ?? reason.subject}</strong><span>{reason.kind === 'feature' ? featureValue(reason.subject, reason.observed) + ' при личной норме ' + featureValue(reason.subject, reason.baseline) : reason.kind === 'pending_state' ? 'Ожидание ' + (reason.observed == null ? '—' : duration(reason.observed)) + ' · обычно ' + (reason.baseline == null ? '—' : duration(reason.baseline)) : reason.subject}</span></div>)}</div> : <p>Для выбранной даты модель не отметила отдельных сигналов.</p>}
+          <small>Отклонение и редкость помогают выбрать, что проверить; сами по себе они не доказывают причину поведения.</small>
+        </div>}
+      </>}
     </Panel>
 
-    <Panel title="Сценарии, найденные автоматически" subtitle="Похожие последовательности сгруппированы по LCS; порог поддержки — два разных клиента">
-      {patternError ? <p className="body-note">Не удалось загрузить найденные сценарии: {patternError}</p> : patterns.length === 0
-        ? <p className="body-note">Повторяющихся последовательностей пока недостаточно. Они появятся, когда похожие цепочки событий встретятся у нескольких клиентов.</p>
-        : <div className="table-scroll"><table><thead><tr><th>Последовательность</th><th>Клиенты</th><th>Доля клиентов с историей</th></tr></thead><tbody>
-          {patterns.map((pattern, index) => <tr key={`${index}-${pattern.sequence.join('|')}`}><td>{pattern.sequence.join(' → ')}</td><td>{pattern.support} · {pattern.clientIds.slice(0, 8).map(id => <Link className="text-link" key={id} to={`/historical?client=${id}`}>{id} </Link>)}</td><td>{Math.round(pattern.supportRatio * 100)}%</td></tr>)}
-        </tbody></table></div>}
-    </Panel>
-
-    {assessment && <>
-      <Panel title="Отклонения от личной нормы" subtitle="Последовательности клиента сравниваются с его предыдущими цепочками событий">
-        {personalSequences.length ? personalSequences.map(item => <div className="body-note" key={item.stream_id}>
-          <strong>{item.stream_id}</strong> · {item.is_unusual ? 'новая для клиента последовательность' : 'похожа на прежнее поведение'} · уверенность сравнения {Math.round(item.confidence * 100)}%<br />
-          Сейчас: {item.observed.join(' → ')}<br />
-          Ближайшая прежняя: {item.closest_historical.length ? item.closest_historical.join(' → ') : 'пока нет похожего окна'} · сходство {item.similarity == null ? '—' : `${Math.round(item.similarity * 100)}%`} · последнее событие {moment(item.started_at)}
-        </div>) : <p className="body-note">Новых цепочек для сравнения пока нет. При достаточной истории модель сопоставит последние события услуги с её прежними последовательностями.</p>}
+    <div className="historical-main-grid">
+      <Panel title="Главные изменения поведения" subtitle="Текущее значение, личная норма, отклонение и начало" className="historical-changes">
+        {mainChanges.length ? <div className="historical-change-list">{mainChanges.map(([key, item]) => {
+          const current = latest?.features[key];
+          const baseline = Math.abs(item.short_term_z_score ?? 0) >= Math.abs(item.long_term_z_score ?? 0) ? item.short_term_mean ?? item.long_term_mean : item.long_term_mean ?? item.short_term_mean;
+          const start = anomalyStart(key);
+          return <article className="historical-change-card" key={key}><div className="historical-change-title"><strong>{metricNames[key] ?? key}</strong><b>{sigma(item.score)}</b></div><div className="historical-change-values"><div><small>Сейчас</small><strong>{featureValue(key, current)}</strong></div><div><small>Личная норма</small><strong>{featureValue(key, baseline)}</strong></div></div><p>{item.observations} наблюдений · начало: {start ? calendarDate(start) : 'определяется по снимкам'}</p></article>;
+        })}</div> : <p className="historical-compact-note">{(assessment?.familiarity ?? 0) < 1 ? 'Числовая история пока недостаточно полна для уверенной интерпретации.' : 'Числовые показатели не превышают порог 3σ.'}</p>}
       </Panel>
 
-      <Panel title="Почему обнаружено отклонение" subtitle="Показываются изменившиеся признаки, переходы, личная необычность и начало отклонения">
-        {anomalyReasons.length ? anomalyReasons.map((reason, index) => {
-          const start = reason.kind === 'feature' ? anomalyStart(reason.subject) : null;
-          const detail = reason.kind === 'feature'
-            ? `Текущее: ${featureValue(reason.subject, latest?.features[reason.subject])} · личная норма: ${featureValue(reason.subject, reason.baseline)}`
-            : reason.kind === 'personal_sequence'
-              ? `Последовательность: ${reason.explanation}`
-              : `Ожидание: ${reason.observed == null ? '—' : hours(reason.observed)} · обычно: ${reason.baseline == null ? '—' : hours(reason.baseline)}`;
-          const unusualness = reason.score == null ? '—'
-            : reason.score_label === 'standard_deviations' ? score(reason.score)
-              : reason.score_label === 'transition_rarity_0_to_1' ? `индекс редкости ${reason.score.toFixed(2)} / 1`
-                : reason.score_label === 'multiple_of_typical_wait' ? `${reason.score.toFixed(1)}× обычного ожидания`
-                  : `${Math.round(reason.score * 100)}% отличия от личной цепочки`;
-          return <div className="body-note" key={`${reason.kind}-${reason.subject}-${index}`}>
-            <strong>{metricNames[reason.subject] ?? reason.subject}</strong> · {reason.direction}<br />
-            {detail} · необычность: {unusualness}<br />
-            Начало: {start ?? (reason.started_at == null ? 'определяется по истории снимков' : moment(reason.started_at))}. {reason.kind === 'personal_sequence' ? `Сходство с прежней последовательностью: ${reason.observed == null ? '—' : `${Math.round(reason.observed * 100)}%`}.` : reason.explanation}
-          </div>;
-        }) : <p className="body-note">В последнем снимке объяснимых отклонений не отмечено.</p>}
+      <Panel title="Что стоит проверить" subtitle="Проверочные действия по сигналам, без утверждений о причинах ухода" className="historical-actions">
+        {checks.length ? <div className="historical-check-list">{checks.map(item => <article className="historical-check-card" key={item.key}><CircleAlert size={17} /><div><strong>{item.title}</strong><p>{item.detail}</p><Link to={item.href}>{item.link}<ArrowUpRight size={13} /></Link></div></article>)}</div> : <p className="historical-compact-note">Сейчас нет новых сигналов, требующих отдельной проверки.</p>}
+        <Link className="historical-snapshot-link" to={'/snapshot?client=' + account.id}>Открыть текущий профиль клиента <ArrowUpRight size={14} /></Link>
       </Panel>
+    </div>
 
-      <Panel title="Профиль поведения" subtitle="Welford хранит долгую статистику; затухающие нормы адаптируются к изменениям">
-        <div className="table-scroll"><table><thead><tr><th>Признак</th><th>Текущая аномальность</th><th>Краткая норма</th><th>Длинная норма</th><th>Сдвиг нормы</th><th>Наблюдения</th></tr></thead><tbody>
-          {deviations.map(([key, value]) => <tr key={key}><td>{metricNames[key] ?? key}</td><td>{score(value.score)}</td><td>{value.short_term_mean?.toFixed(2) ?? '—'}</td><td>{value.long_term_mean?.toFixed(2) ?? '—'}</td><td>{value.baseline_shift == null ? '—' : `${value.baseline_shift > 0 ? '+' : ''}${value.baseline_shift.toFixed(2)}`}</td><td>{value.observations}</td></tr>)}
-        </tbody></table></div>
-      </Panel>
+    {(transitionChains.length > 0 || pendingStates.some(item => item.is_overdue)) && <div id="history-transitions"><Panel title="История переходов услуг" subtitle="Цепочки состояний и время шага сравниваются с привычной длительностью клиента" className="historical-transitions">
+      {transitionChains.length > 0 && <div className="historical-transition-list">{transitionChains.map(chain => <article className="historical-transition-card" key={chain.streamId}><div className="historical-transition-service"><small>Услуга · {calendarDate(chain.latest.observedOn)}</small><strong>{chain.streamId}</strong></div><div className="historical-transition-chain"><small>Последовательность</small><strong>{chain.states.map(eventName).join(' → ')}</strong></div><div className="historical-transition-duration"><small>Последний шаг</small><strong>{duration(chain.latest.elapsed_ms)}</strong><span>{chain.latest.expected_elapsed_ms == null ? 'Личная норма ещё не сформирована' : 'обычно ' + duration(chain.latest.expected_elapsed_ms)}</span></div><span className={chain.latest.is_new_transition || chain.latest.is_rare_transition ? 'historical-transition-tag is-unusual' : 'historical-transition-tag'}>{chain.latest.is_new_transition ? 'Новый' : chain.latest.is_rare_transition ? 'Редкий' : 'Наблюдался ' + chain.latest.prior_count + ' раз'}</span></article>)}</div>}
+      {pendingStates.some(item => item.is_overdue) && <div className="historical-pending-note"><Clock3 size={15} /><span>{pendingStates.filter(item => item.is_overdue).map(item => item.stream_id + ': ' + eventName(item.state) + ' ' + duration(item.waiting_ms) + ', обычно ' + duration(item.typical_wait_ms)).join(' · ')}</span></div>}
+    </Panel></div>}
 
-      <Panel title="Переходы и ожидание продления" subtitle="События услуг взяты из журнала PostgreSQL; время сравнивается с личной историей">
-        {transitions.length === 0 && pendingStates.length === 0 ? <p className="body-note">Новых переходов с предыдущего снимка нет. Граф пополняется новыми изменениями услуг и продлений.</p> : <>
-          {pendingStates.length > 0 && <div className="table-scroll"><table><thead><tr><th>Услуга</th><th>Состояние</th><th>Началось</th><th>Ожидание</th><th>Обычно следующий шаг</th><th>Типичное время</th><th>Срок ожидания</th></tr></thead><tbody>
-            {pendingStates.map(item => <tr key={item.stream_id}><td>{item.stream_id}</td><td>{item.state}</td><td>{item.started_at == null ? '—' : moment(item.started_at)}</td><td>{hours(item.waiting_ms)}</td><td>{item.expected_next_event}</td><td>{hours(item.typical_wait_ms)}</td><td>{item.is_overdue ? 'Просрочено' : hours(item.overdue_after_ms)}</td></tr>)}
-          </tbody></table></div>}
-          {transitions.length > 0 && <div className="table-scroll"><table><thead><tr><th>Услуга</th><th>Переход</th><th>Время</th><th>Повторений</th><th>Обычный интервал</th><th>Редкость</th></tr></thead><tbody>
-            {transitions.slice(-12).reverse().map((item, index) => <tr key={`${item.stream_id}-${item.from}-${item.to}-${index}`}><td>{item.stream_id}</td><td>{item.from} → {item.to}</td><td>{hours(item.elapsed_ms)}</td><td>{item.prior_count}</td><td>{item.expected_elapsed_ms == null ? '—' : hours(item.expected_elapsed_ms)}</td><td>{item.is_new_transition ? 'Новый' : item.is_rare_transition ? 'Редкий' : 'Обычный'}</td></tr>)}
-          </tbody></table></div>}
-        </>}
-      </Panel>
-
-      <Panel title="Заданные базовые сценарии (LCS)" subtitle="Дополнительные шаблоны оплаты и сокращения услуг; автоматическое обнаружение показано выше">
-        {sequenceMatches.length ? sequenceMatches.map(match => <div className="body-note" key={match.pattern}><strong>{match.pattern}</strong> · сходство {Math.round(match.similarity * 100)}%, уверенность профиля {Math.round(match.confidence * 100)}%<br />Шаблон: {match.expected.join(' → ')}<br />Наблюдалось: {match.observed.join(' → ')}</div>) : <p className="body-note">Совпадений с базовыми шаблонами нет.</p>}
-      </Panel>
-
-      <Panel title="Похожие клиенты по последовательности событий" subtitle="LCS сравнивает последние цепочки разных клиентов">
-        {sequencePeers.length ? sequencePeers.map(peer => <div className="body-note" key={peer.accountId}><strong>Клиент {peer.accountId}</strong> · сходство {Math.round(peer.similarity * 100)}%<br />{peer.sequence.join(' → ')}</div>) : <p className="body-note">Похожие последовательности пока не найдены.</p>}
-      </Panel>
-    </>}
-  </>;
+    <details className="historical-advanced" id="history-advanced">
+      <summary><span><strong>Анализ последовательностей и подробная статистика</strong><small>LCS, похожие клиенты, личные цепочки и профиль числовых отклонений</small></span><ChevronDown size={18} /></summary>
+      <div className="historical-advanced-content">
+        {personalSequences.length > 0 && <section className="historical-analysis-section"><h3>Личные последовательности</h3>{personalSequences.map(item => <article className="historical-sequence-card" key={item.stream_id}><strong>{item.stream_id}</strong><span>{item.is_unusual ? 'Новая для клиента' : 'Похожа на прежние'} · сходство {item.similarity == null ? '—' : percent(item.similarity)} · уверенность {percent(item.confidence)}</span><p>Сейчас: {item.observed.map(eventName).join(' → ')}</p><p>Прежде: {item.closest_historical.length ? item.closest_historical.map(eventName).join(' → ') : 'Сопоставимого окна ещё нет'}</p><small>Начало последовательности: {eventDate(item.started_at)} · прошлых окон: {item.prior_windows}</small></article>)}</section>}
+        {sequenceMatches.length > 0 && <section className="historical-analysis-section"><h3>Сходство с заданными сценариями · LCS</h3>{sequenceMatches.map(match => <article className="historical-sequence-card" key={match.pattern}><strong>{match.pattern} · сходство {percent(match.similarity)}</strong><p>Шаблон: {match.expected.map(eventName).join(' → ')}</p><p>Наблюдалось: {match.observed.map(eventName).join(' → ')}</p></article>)}</section>}
+        {accountPatterns.length > 0 && <section className="historical-analysis-section"><h3>Паттерны, найденные у этого клиента и других</h3><div className="table-scroll"><table><thead><tr><th>Последовательность</th><th>Клиенты</th><th>Доля базы с историей</th></tr></thead><tbody>{accountPatterns.map((pattern, index) => <tr key={pattern.sequence.join('|') + index}><td>{pattern.sequence.map(eventName).join(' → ')}</td><td>{pattern.support}</td><td>{percent(pattern.supportRatio)}</td></tr>)}</tbody></table></div></section>}
+        {patternError && <p className="historical-compact-note">Общие найденные паттерны временно недоступны: {patternError}</p>}
+        {sequencePeers.length > 0 && <section className="historical-analysis-section"><h3>Похожие клиенты по последовательности</h3><div className="historical-peer-list">{sequencePeers.map(peer => <Link to={'/historical?client=' + peer.accountId} key={peer.accountId}><strong>Клиент {peer.accountId}</strong><span>сходство {percent(peer.similarity)}</span><small>{peer.sequence.map(eventName).join(' → ')}</small><ArrowUpRight size={14} /></Link>)}</div></section>}
+        {deviations.length > 0 && <section className="historical-analysis-section"><h3>Короткая и длинная нормы · Welford и Concept Drift</h3><div className="table-scroll"><table><thead><tr><th>Показатель</th><th>Отклонение</th><th>Короткая норма</th><th>Длинная норма</th><th>Сдвиг нормы</th><th>Наблюдений</th></tr></thead><tbody>{deviations.map(([key, value]) => <tr key={key}><td>{metricNames[key] ?? key}</td><td>{sigma(value.score)}</td><td>{featureValue(key, value.short_term_mean)}</td><td>{featureValue(key, value.long_term_mean)}</td><td>{value.baseline_shift == null ? '—' : (value.baseline_shift > 0 ? '+' : '') + featureValue(key, value.baseline_shift)}</td><td>{value.observations}</td></tr>)}</tbody></table></div><p className="historical-compact-note">Числа описывают отличие от личной нормы. Они помогают исследовать динамику, но не устанавливают причину изменения.</p></section>}
+        {!personalSequences.length && !sequenceMatches.length && !accountPatterns.length && !sequencePeers.length && !deviations.length && <p className="historical-compact-note">Истории пока недостаточно для анализа последовательностей и статистического профиля.</p>}
+      </div>
+    </details>
+  </div>;
 }

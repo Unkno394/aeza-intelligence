@@ -41,4 +41,15 @@ if first_client is not None:
     except (urllib.error.URLError, json.JSONDecodeError) as error:
         raise SystemExit(f'client_history API check failed: {error}') from None
     print(f'client_history[{first_client}]={len(history)}')
+    try:
+        with urllib.request.urlopen(base + f'/api/client/cashflow/{first_client}', timeout=10) as response:
+            cashflow = json.load(response)
+    except (urllib.error.URLError, json.JSONDecodeError) as error:
+        raise SystemExit(f'client_cashflow API check failed: {error}') from None
+    windows = cashflow['windows']
+    assert [item['days'] for item in windows] == [7, 30, 60, 90]
+    assert all(item['projectedOutflowCents'] >= 0 and item['scheduledRenewals'] >= 0 for item in windows)
+    assert all(a['projectedOutflowCents'] <= b['projectedOutflowCents'] for a, b in zip(windows, windows[1:]))
+    assert cashflow['assumption'] and isinstance(cashflow['startingBalanceCents'], int)
+    print(f'client_cashflow[{first_client}]: {len(windows)} windows; no-top-up scenario')
 PY

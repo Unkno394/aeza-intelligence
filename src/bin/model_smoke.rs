@@ -60,19 +60,20 @@ fn feature_map(client: &ClientFeatures) -> BTreeMap<String, f64> {
         ("services_count".into(), client.services_count as f64),
         ("monthly_spend".into(), client.monthly_spend),
         ("spendable_balance".into(), client.spendable_balance as f64),
-        ("payment_coverage".into(), client.payment_coverage),
         ("upcoming_payments".into(), client.upcoming_payments as f64),
     ]);
+    if let Some(coverage) = client.payment_coverage.filter(|value| value.is_finite()) {
+        values.insert("payment_coverage".into(), coverage);
+    }
     for (name, value) in [
         ("no_auto_prolong_share", client.no_auto_prolong_share),
         ("prolong_wait_share", client.prolong_wait_share),
         ("failed_prolong_share", client.failed_prolong_share),
         ("expiring_revenue_share", client.expiring_revenue_share),
     ] {
-        values.insert(
-            name.into(),
-            value.filter(|value| value.is_finite()).unwrap_or(0.0),
-        );
+        if let Some(value) = value.filter(|value| value.is_finite()) {
+            values.insert(name.into(), value);
+        }
     }
     values
 }

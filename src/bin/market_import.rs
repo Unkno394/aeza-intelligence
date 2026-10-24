@@ -6,7 +6,7 @@ use aeza_intelligence::market_store::{
     ObservationSource, apply_schema, count_observations, save_offers,
 };
 use anyhow::{Context, Result, bail};
-use chrono::{Datelike, Utc};
+use chrono::{Datelike, NaiveDateTime, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use reqwest::Client;
 use serde::Deserialize;
@@ -31,6 +31,19 @@ enum Command {
         provider: Provider,
         #[arg(long)]
         file: PathBuf,
+    },
+    /// Import a previously downloaded Wayback HTML file without requesting Wayback again.
+    ImportArchiveFile {
+        #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
+        database_url: String,
+        #[arg(long, value_enum)]
+        provider: Provider,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        timestamp: String,
+        #[arg(long)]
+        source_url: String,
     },
     /// Import the signed Aéza public tariff snapshot used by the simulator.
     AezaSnapshot {
@@ -161,6 +174,50 @@ struct SnapshotPrice {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::ImportArchiveFile {
+            database_url,
+            provider,
+            file,
+            timestamp,
+            source_url,
+        } => {
+            if matches!(provider, Provider::All) {
+                bail!("--provider must name one provider");
+            }
+            let observed_at = NaiveDateTime::parse_from_str(&timestamp, "%Y%m%d%H%M%S")?.and_utc();
+            let html = std::fs::read_to_string(&file)
+                .with_context(|| format!("cannot read {}", file.display()))?;
+            let offers = parse_html(provider.code(), &html);
+            let complete = offers.iter().filter(|offer| offer.is_complete()).count();
+            if complete == 0 {
+                bail!(
+                    "{} has no complete {} tariffs",
+                    file.display(),
+                    provider.code()
+                );
+            }
+            let pool = PgPoolOptions::new()
+                .max_connections(4)
+                .connect(&database_url)
+                .await?;
+            apply_schema(&pool).await?;
+            let source = ObservationSource {
+                kind: "archive",
+                observed_at,
+                source_url: source_url.clone(),
+                archive_url: Some(format!(
+                    "https://web.archive.org/web/{timestamp}id_/{source_url}"
+                )),
+                cdx_digest: None,
+                parser_version: provider.parser_version(),
+            };
+            let saved = save_offers(&pool, provider.code(), &source, &offers).await?;
+            println!(
+                "{} {}: saved {saved} tariffs ({complete} complete)",
+                provider.code(),
+                timestamp
+            );
+        }
         Command::AezaSnapshot {
             database_url,
             file,
