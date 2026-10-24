@@ -1,4 +1,4 @@
-export type ExportRiskLevel='low'|'medium'|'high';
+export type ExportRiskLevel='low'|'medium'|'high'|'limited'|'insufficient';
 export interface ExportRiskRow {
  id:string;
  email:string;
@@ -6,20 +6,20 @@ export interface ExportRiskRow {
  topupsCents:number;
  monthlyCents:number;
  upcomingCents:number;
- paymentCoverage:number;
+ paymentCoverage:number|null;
  score:number;
  level:ExportRiskLevel;
 }
 export interface ExportRiskReport {rows:ExportRiskRow[];renewalWindowDays:number;createdAt:string}
 
 const headers=['ID','Email','Баланс, EUR','Пополнено всего, EUR','Услуги в месяц, EUR','Платежи в окне, EUR','Покрытие платежей, ×','Risk Score','Уровень риска'];
-const riskLabels:Record<ExportRiskLevel,string>={low:'Низкий',medium:'Средний',high:'Высокий'};
+const riskLabels:Record<ExportRiskLevel,string>={low:'Низкий',medium:'Средний',high:'Высокий',limited:'Ограниченные данные',insufficient:'Недостаточно данных'};
 const euro=(cents:number)=>Number((cents/100).toFixed(2));
 const fileDate=(report:ExportRiskReport)=>report.createdAt.slice(0,10)||new Date().toISOString().slice(0,10);
 const rowsAsValues=(report:ExportRiskReport)=>([[
  'ID','Email','Balance, EUR','Total replenished, EUR','Service cost / month, EUR','Payments in window, EUR','Payment coverage, x','Risk Score','Risk level',
 ],...report.rows.map(row=>[
- row.id,row.email,euro(row.balanceCents),euro(row.topupsCents),euro(row.monthlyCents),euro(row.upcomingCents),row.paymentCoverage,row.score,riskLabels[row.level],
+ row.id,row.email,euro(row.balanceCents),euro(row.topupsCents),euro(row.monthlyCents),euro(row.upcomingCents),row.paymentCoverage??'',row.score,riskLabels[row.level],
 ])] as Array<Array<string|number>>);
 const xmlEscape=(value:string)=>value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
 const sqlQuote=(value:string)=>`'${value.replace(/'/g,"''")}'`;
@@ -52,13 +52,13 @@ export function exportRiskReportSql(report:ExportRiskReport){
   total_replenished_cents BIGINT NOT NULL,
   monthly_service_cost_cents BIGINT NOT NULL,
   upcoming_payments_cents BIGINT NOT NULL,
-  payment_coverage DOUBLE PRECISION NOT NULL,
+  payment_coverage DOUBLE PRECISION,
   risk_score SMALLINT NOT NULL,
   risk_level TEXT NOT NULL
 ) ON COMMIT PRESERVE ROWS;`,
  ];
  if(report.rows.length){
-  const values=report.rows.map(row=>`  (${sqlQuote(row.id)}, ${sqlQuote(row.email)}, ${row.balanceCents}, ${row.topupsCents}, ${row.monthlyCents}, ${row.upcomingCents}, ${Number(row.paymentCoverage.toFixed(4))}, ${row.score}, ${sqlQuote(row.level)})`);
+  const values=report.rows.map(row=>`  (${sqlQuote(row.id)}, ${sqlQuote(row.email)}, ${row.balanceCents}, ${row.topupsCents}, ${row.monthlyCents}, ${row.upcomingCents}, ${row.paymentCoverage===null?'NULL':Number(row.paymentCoverage.toFixed(4))}, ${row.score}, ${sqlQuote(row.level)})`);
   statements.push(`INSERT INTO aeza_churn_risk_report (client_id, email, balance_cents, total_replenished_cents, monthly_service_cost_cents, upcoming_payments_cents, payment_coverage, risk_score, risk_level)\nVALUES\n${values.join(',\n')};`);
  }
  statements.push('COMMIT;','SELECT * FROM aeza_churn_risk_report ORDER BY risk_score DESC, client_id;');
@@ -144,7 +144,7 @@ function drawPdfPage(report:ExportRiskReport,pageRows:ExportRiskRow[],pageNumber
   {title:'Пополнено €',width:82,value:(row:ExportRiskRow)=>formatMoney(row.topupsCents),right:true},
   {title:'Услуги/мес €',width:82,value:(row:ExportRiskRow)=>formatMoney(row.monthlyCents),right:true},
   {title:'Платёж €',width:82,value:(row:ExportRiskRow)=>formatMoney(row.upcomingCents),right:true},
-  {title:'Покрытие',width:76,value:(row:ExportRiskRow)=>`${row.paymentCoverage.toFixed(2)}×`,right:true},
+  {title:'Покрытие',width:76,value:(row:ExportRiskRow)=>row.paymentCoverage===null?'—':`${row.paymentCoverage.toFixed(2)}×`,right:true},
   {title:'Score',width:56,value:(row:ExportRiskRow)=>String(row.score),right:true},
   {title:'Уровень',width:78,value:(row:ExportRiskRow)=>riskLabels[row.level]},
  ];

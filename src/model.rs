@@ -128,5 +128,5 @@ pub struct ClientFeatures {
     pub expiring_revenue_share: Option<f64>,
     pub upcoming_payments: i64,
     pub spendable_balance: i64,
-    pub payment_coverage: f64,
+    pub payment_coverage: Option<f64>,
 }

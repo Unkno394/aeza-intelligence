@@ -30,7 +30,7 @@ export default function Market(){
  const latestByBrand=brands.map(item=>({name:item.name,code:item.code,row:interest.filter(point=>point.brandCode===item.code).at(-1)}));
  const observedDates=rows.length?`${rows[0].observedOn} — ${rows.at(-1)!.observedOn}`:'Нет наблюдений';
  return <div className="market-page">
- <div className="page-heading"><div><div className="market-eyebrow">MARKET INTELLIGENCE / SEARCH DEMAND</div><h1>Брендовый интерес</h1><p>Как меняется поисковый спрос на Aéza и других VPS-провайдеров</p></div><div className="market-source-pill"><span/> GOOGLE SEARCH · TRENDSMCP</div></div>
+ <div className="page-heading"><div><div className="market-eyebrow">{view==='interest'?'MARKET INTELLIGENCE / SEARCH DEMAND':'MARKET INTELLIGENCE / PRICE BENCHMARK'}</div><h1>{view==='interest'?'Брендовый интерес':'Бенчмарк цен'}</h1><p>{view==='interest'?'Как меняется поисковый спрос на Aéza и других VPS-провайдеров':'Сопоставление тарифов Aéza с предложениями конкурентов'}</p></div><div className="market-source-pill"><span/> {view==='interest'?'GOOGLE SEARCH · TRENDSMCP':'ДАННЫЕ ИЗ POSTGRESQL'}</div></div>
  <nav className="market-intelligence-tabs" aria-label="Рыночная аналитика"><button type="button" aria-pressed={view==='interest'} onClick={()=>setView('interest')}>Поисковый интерес</button><button type="button" aria-pressed={view==='prices'} onClick={()=>setView('prices')}>Цены конкурентов</button></nav>
  <div className="market-interest-view" hidden={view!=='interest'}>
  {loading?<div className="market-state">Загружаем рыночные данные…</div>:<>

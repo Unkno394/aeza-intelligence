@@ -124,6 +124,25 @@ struct TariffHistoryPoint {
 
 #[derive(Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
+struct BenchmarkHistoryPoint {
+    month_start: NaiveDate,
+    plan_key: String,
+    plan_name: String,
+    cpu_cores: f64,
+    ram_gib: f64,
+    disk_gib: f64,
+    disk_type: String,
+    region: String,
+    price_rub: f64,
+    market_median_rub: f64,
+    provider_median_min_rub: f64,
+    provider_median_max_rub: f64,
+    providers_at_median: i64,
+    gap_percent: f64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 struct TariffClientCohort {
     plan_key: String,
     linked_services: i64,
@@ -224,6 +243,28 @@ struct FinancialLedgerEntry {
     amount_cents: i64,
     status: String,
     source: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CashflowWindow {
+    days: i64,
+    scheduled_renewals: i64,
+    projected_outflow_cents: i64,
+    balance_after_cents: i64,
+    deficit_cents: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CashflowForecast {
+    account_id: i64,
+    as_of: DateTime<Utc>,
+    starting_balance_cents: i64,
+    included_services: i64,
+    unresolved_services: i64,
+    windows: Vec<CashflowWindow>,
+    assumption: &'static str,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -346,7 +387,9 @@ struct SnapshotRisk {
     monthly_cents: i64,
     topups_cents: i64,
     spendable_balance_cents: i64,
-    payment_coverage: f64,
+    payment_coverage: Option<f64>,
+    assessment_status: &'static str,
+    available_factors: usize,
 }
 
 #[derive(Serialize, PartialEq)]
@@ -383,6 +426,10 @@ async fn main() -> Result<()> {
         .route("/api/market/prices/monitor", get(monitored_prices))
         .route("/api/market/prices/history", get(price_history))
         .route(
+            "/api/market/prices/benchmarks/history",
+            get(price_benchmark_history),
+        )
+        .route(
             "/api/market/prices/client-cohorts",
             get(tariff_client_cohorts),
         )
@@ -391,6 +438,7 @@ async fn main() -> Result<()> {
         .route("/api/client/dataset", get(client_dataset))
         .route("/api/client/analysis", get(client_analysis))
         .route("/api/client/financial-ledger/{id}", get(financial_ledger))
+        .route("/api/client/cashflow/{id}", get(client_cashflow))
         .route("/api/client/data-quality", get(client_data_quality))
         .route("/api/client/snapshot", post(client_snapshot_risks))
         .route("/api/client/historical/{id}", get(client_history))
@@ -839,7 +887,7 @@ async fn load_dataset(pool: &PgPool) -> Result<ClientDataset, sqlx::Error> {
                 status: if status == "performed" {
                     "completed"
                 } else {
-                    "failed"
+                    "unknown"
                 },
                 created_at: row.get("createdAt"),
             }
@@ -873,6 +921,99 @@ async fn financial_ledger(
     Ok(Json(rows))
 }
 
+/// Scenario forecast with no future top-ups and unchanged renewal prices.
+async fn client_cashflow(
+    State(pool): State<PgPool>,
+    Path(id): Path<i64>,
+) -> Result<Json<CashflowForecast>, StatusCode> {
+    let now = Utc::now();
+    let balance: Option<i64> = sqlx::query_scalar(
+        "SELECT balance + CASE WHEN \"bonusState\" = 'unlocked' THEN \"bonusBalance\" ELSE 0 END \
+         FROM public.accounts WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(db_error)?;
+    let Some(starting_balance_cents) = balance else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    let rows = sqlx::query(
+        "SELECT price::bigint AS renewal_cents, \"expiresAt\", \
+         public.payment_term_seconds(\"paymentTerm\"::text) AS term_seconds, \
+         status::text AS status, \"autoProlong\" AS auto_prolong \
+         FROM public.services WHERE \"ownerId\" = $1 AND status <> 'deleted' \
+         AND \"createdAt\" <= $2 ORDER BY id",
+    )
+    .bind(id)
+    .bind(now)
+    .fetch_all(&pool)
+    .await
+    .map_err(db_error)?;
+    let horizon = now + chrono::Duration::days(90);
+    let limits = [7_i64, 30, 60, 90];
+    let mut outflows = [0_i64; 4];
+    let mut renewals = [0_i64; 4];
+    let mut included_services = 0_i64;
+    let mut unresolved_services = 0_i64;
+    for row in rows {
+        let term_seconds: f64 = row.get("term_seconds");
+        if !term_seconds.is_finite() || term_seconds <= 0.0 {
+            unresolved_services += 1;
+            continue;
+        }
+        let status: String = row.get("status");
+        let auto_prolong: bool = row.get("auto_prolong");
+        let mut due_at: DateTime<Utc> = row.get("expiresAt");
+        if status != "prolong_wait" && !auto_prolong {
+            continue;
+        }
+        if status == "prolong_wait" && due_at < now {
+            due_at = now;
+        }
+        if due_at > horizon {
+            continue;
+        }
+        included_services += 1;
+        let amount: i64 = row.get("renewal_cents");
+        let term = chrono::Duration::seconds(term_seconds.ceil() as i64);
+        let mut due = due_at;
+        while due <= horizon {
+            let days = (due - now).num_seconds().max(0) as f64 / 86_400.0;
+            for (index, limit) in limits.iter().enumerate() {
+                if days <= *limit as f64 {
+                    outflows[index] = outflows[index].saturating_add(amount);
+                    renewals[index] += 1;
+                }
+            }
+            due += term;
+        }
+    }
+    let windows = limits
+        .iter()
+        .enumerate()
+        .map(|(index, days)| {
+            let balance_after_cents = starting_balance_cents.saturating_sub(outflows[index]);
+            CashflowWindow {
+                days: *days,
+                scheduled_renewals: renewals[index],
+                projected_outflow_cents: outflows[index],
+                balance_after_cents,
+                deficit_cents: balance_after_cents.saturating_neg().max(0),
+            }
+        })
+        .collect();
+    Ok(Json(CashflowForecast {
+        account_id: id,
+        as_of: now,
+        starting_balance_cents,
+        included_services,
+        unresolved_services,
+        windows,
+        assumption: "No top-ups; active auto-renew services and current prolong_wait renew at their current listed price and payment term.",
+    }))
+}
+
 async fn client_data_quality(
     State(pool): State<PgPool>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -892,12 +1033,24 @@ async fn client_data_quality(
          (SELECT max(s.observed_on) FROM public.client_snapshots s \
           JOIN public.accounts a ON a.id = s.account_id \
           WHERE a.id >= 0 AND a.email NOT LIKE '%@example.test') AS latest_real_snapshot, \
+         (SELECT coalesce(jsonb_agg(jsonb_build_object(\
+              'serviceName', service_name, 'services', service_count, 'accounts', account_count) \
+              ORDER BY service_count DESC), '[]'::jsonb) \
+          FROM (SELECT s.name AS service_name, count(*)::bigint AS service_count, \
+                       count(DISTINCT s.\"ownerId\")::bigint AS account_count \
+                FROM public.services s JOIN public.accounts a ON a.id = s.\"ownerId\" \
+                WHERE s.tariff_product_id IS NULL AND a.id >= 0 \
+                  AND a.email NOT LIKE '%@example.test' \
+                GROUP BY s.name ORDER BY count(*) DESC LIMIT 100) unlinked) \
+          AS unlinked_service_names, \
+         (SELECT count(*) FROM public.transactions WHERE type = 'prolong' \
+          AND status = 'not_performed') AS ambiguous_prolongs, \
+         (SELECT count(*) FROM public.transactions WHERE type = 'prolong' \
+          AND status = 'performed') AS confirmed_successful_prolongs, \
          (SELECT count(*) FROM public.services s \
           JOIN public.accounts a ON a.id = s.\"ownerId\" \
           WHERE s.tariff_product_id IS NULL AND a.id >= 0 \
             AND a.email NOT LIKE '%@example.test') AS unlinked_services, \
-         (SELECT count(*) FROM public.transactions WHERE type = 'prolong' \
-          AND status = 'not_performed') AS ambiguous_prolongs, \
          (SELECT count(*) FROM public.client_snapshots s \
           JOIN public.accounts a ON a.id = s.account_id \
           WHERE a.id >= 0 AND a.email NOT LIKE '%@example.test' \
@@ -917,7 +1070,14 @@ async fn client_data_quality(
         "realAccountsWithHistory": row.get::<i64, _>("real_accounts_with_history"),
         "latestRealSnapshot": row.get::<Option<NaiveDate>, _>("latest_real_snapshot"),
         "unlinkedServices": row.get::<i64, _>("unlinked_services"),
+        "unlinkedServiceNames": row.get::<serde_json::Value, _>("unlinked_service_names"),
         "ambiguousProlongs": row.get::<i64, _>("ambiguous_prolongs"),
+        "renewalOutcomes": {
+            "confirmedSuccessful": row.get::<i64, _>("confirmed_successful_prolongs"),
+            "unknown": row.get::<i64, _>("ambiguous_prolongs"),
+            "confirmedFailed": 0,
+            "note": "The source schema exposes performed and not_performed only; not_performed is unresolved."
+        },
         "snapshotsWithoutEventCursor": row.get::<i64, _>("snapshots_without_event_cursor"),
         "recentBehaviorEvents": row.get::<i64, _>("recent_behavior_events"),
     })))
@@ -1010,7 +1170,7 @@ fn calculate_snapshot_risk(
             "Неуспешные продления",
             client.failed_prolong_share,
             config.weights.failed_prolong,
-            "Доля продлений со статусом not_performed.",
+            "Не оценивается: not_performed не подтверждает окончательный отказ.",
         ),
         (
             "expiringRevenueShare",
@@ -1022,7 +1182,7 @@ fn calculate_snapshot_risk(
         (
             "paymentCoverage",
             "Покрытие ближайших платежей",
-            Some(client.payment_coverage),
+            client.payment_coverage,
             config.weights.payment_coverage,
             "Доступный баланс / платежи в ближайшем окне; риск возникает ниже 1.",
         ),
@@ -1062,22 +1222,33 @@ fn calculate_snapshot_risk(
         .sum::<f64>()
         .round()
         .clamp(0.0, 100.0) as i64;
+    let available_factors = factors.iter().filter(|factor| factor.available).count();
+    let assessment_status = if client.services_count == 0 {
+        "insufficient_data"
+    } else if available_factors < 3 || client.payment_coverage.is_none() {
+        "limited_data"
+    } else {
+        "sufficient_data"
+    };
+    let level = match assessment_status {
+        "insufficient_data" => "insufficient",
+        "limited_data" => "limited",
+        _ if score >= config.high_threshold => "high",
+        _ if score >= config.medium_threshold => "medium",
+        _ => "low",
+    };
     SnapshotRisk {
         account_id: client.account_id.to_string(),
         score,
-        level: if score >= config.high_threshold {
-            "high"
-        } else if score >= config.medium_threshold {
-            "medium"
-        } else {
-            "low"
-        },
+        level,
         factors,
         upcoming_cents: client.upcoming_payments,
         monthly_cents: client.monthly_spend.round() as i64,
         topups_cents,
         spendable_balance_cents: client.spendable_balance,
         payment_coverage: client.payment_coverage,
+        assessment_status,
+        available_factors,
     }
 }
 
@@ -1244,7 +1415,7 @@ async fn price_quality(State(pool): State<PgPool>) -> Result<Json<Vec<TariffQual
 async fn prices(State(pool): State<PgPool>) -> Result<Json<Vec<Price>>, StatusCode> {
     let rows = sqlx::query_as::<_, Price>(
         "SELECT DISTINCT ON (p.provider_tariff_id) providers.name AS provider, \
-         p.plan_name, p.observed_at::date AS observed_on, \
+         p.plan_name, (p.observed_at AT TIME ZONE 'UTC')::date AS observed_on, \
          p.price_minor AS original_minor, p.currency::text AS currency, \
          p.billing_period, p.price_rub_minor, p.rub_rate_on \
          FROM market_intelligence.tariff_prices_rub p \
@@ -1272,7 +1443,7 @@ async fn monitored_prices(
                     t.plan_key, t.plan_name, t.cpu_cores::float8 AS cpu_cores,
                     t.ram_mib::float8 / 1024.0 AS ram_gib,
                     t.disk_gib::float8 AS disk_gib, t.disk_type, t.region,
-                    p.observed_at::date AS observed_on,
+                    (p.observed_at AT TIME ZONE 'UTC')::date AS observed_on,
                     p.price_rub_minor::float8 / 100.0 AS price_rub,
                     lag(p.price_rub_minor::float8 / 100.0) OVER w AS previous_price_rub,
                     p.currency::text AS currency,
@@ -1357,12 +1528,12 @@ async fn price_history(
     State(pool): State<PgPool>,
 ) -> Result<Json<Vec<TariffHistoryPoint>>, StatusCode> {
     let rows = sqlx::query_as::<_, TariffHistoryPoint>(
-        r#"SELECT DISTINCT ON (p.provider_tariff_id, p.observed_at::date)
+        r#"SELECT DISTINCT ON (p.provider_tariff_id, (p.observed_at AT TIME ZONE 'UTC')::date)
                   providers.code AS provider_code, t.plan_key,
                   t.cpu_cores::float8 AS cpu_cores,
                   t.ram_mib::float8 / 1024.0 AS ram_gib,
                   t.disk_gib::float8 AS disk_gib, t.disk_type, t.region,
-                  p.observed_at::date AS observed_on,
+                  (p.observed_at AT TIME ZONE 'UTC')::date AS observed_on,
                   p.price_rub_minor::float8 / 100.0 AS price_rub
            FROM market_intelligence.tariff_prices_rub p
            JOIN market_intelligence.provider_tariffs t ON t.id = p.provider_tariff_id
@@ -1370,13 +1541,98 @@ async fn price_history(
            WHERE p.parse_status = 'complete' AND p.billing_period = 'month'
              AND p.price_kind <> 'unavailable_or_waitlist'
              AND p.price_rub_minor IS NOT NULL
-           ORDER BY p.provider_tariff_id, p.observed_at::date, p.observed_at DESC, p.id DESC
+           ORDER BY p.provider_tariff_id, (p.observed_at AT TIME ZONE 'UTC')::date, p.observed_at DESC, p.id DESC
            LIMIT 50000"#,
     )
     .fetch_all(&pool)
     .await
     .map_err(|error| {
         eprintln!("price history query failed: {error}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(Json(rows))
+}
+
+/// Monthly strict market benchmark. Prices are first reduced to one latest
+/// observation per tariff per month, then to one median per provider, so a
+/// provider with many plans cannot outweigh other providers.
+async fn price_benchmark_history(
+    State(pool): State<PgPool>,
+) -> Result<Json<Vec<BenchmarkHistoryPoint>>, StatusCode> {
+    let rows = sqlx::query_as::<_, BenchmarkHistoryPoint>(
+        r#"WITH monthly AS (
+             SELECT DISTINCT ON (
+                        price.provider_tariff_id,
+                        date_trunc('month', p.observed_at AT TIME ZONE 'UTC')::date
+                    )
+                    date_trunc('month', p.observed_at AT TIME ZONE 'UTC')::date AS month_start,
+                    provider.code AS provider_code, tariff.plan_key, tariff.plan_name,
+                    tariff.cpu_cores::float8 AS cpu_cores,
+                    tariff.ram_mib::float8 / 1024.0 AS ram_gib,
+                    tariff.disk_gib::float8 AS disk_gib,
+                    lower(btrim(tariff.disk_type)) AS disk_key,
+                    btrim(tariff.disk_type) AS disk_type,
+                    lower(btrim(tariff.region)) AS region_key,
+                    btrim(tariff.region) AS region,
+                    price.vat_included,
+                    (tariff.attributes #>> '{normalized_details,traffic_gib}')::bigint AS traffic_gib,
+                    (tariff.attributes #>> '{normalized_details,traffic_unlimited}')::boolean AS traffic_unlimited,
+                    price.price_rub_minor::float8 / 100.0 AS price_rub
+             FROM market_intelligence.tariff_prices_rub price
+             JOIN market_intelligence.provider_tariffs tariff
+               ON tariff.id = price.provider_tariff_id
+             JOIN market_intelligence.providers provider ON provider.id = tariff.provider_id
+             WHERE price.parse_status = 'complete'
+               AND price.billing_period = 'month'
+               AND price.price_kind IN ('regular', 'listed_monthly', 'official_catalog')
+               AND price.price_rub_minor IS NOT NULL
+               AND tariff.cpu_cores IS NOT NULL AND tariff.ram_mib IS NOT NULL
+               AND tariff.disk_gib IS NOT NULL AND tariff.disk_type IS NOT NULL
+               AND nullif(btrim(tariff.region), '') IS NOT NULL
+               AND price.vat_included IS NOT NULL
+               AND (tariff.attributes #>> '{normalized_details,traffic_gib}' IS NOT NULL
+                    OR (tariff.attributes #>> '{normalized_details,traffic_unlimited}')::boolean IS TRUE)
+             ORDER BY price.provider_tariff_id,
+                      date_trunc('month', price.observed_at AT TIME ZONE 'UTC')::date,
+                      price.observed_at DESC, price.id DESC
+           ), provider_medians AS (
+             SELECT month_start, provider_code, cpu_cores, ram_gib, disk_gib,
+                    disk_key, region_key, vat_included, traffic_gib, traffic_unlimited,
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price_rub) AS provider_median_rub
+             FROM monthly
+             WHERE provider_code <> 'aeza'
+             GROUP BY month_start, provider_code, cpu_cores, ram_gib, disk_gib,
+                      disk_key, region_key, vat_included, traffic_gib, traffic_unlimited
+           ), market AS (
+             SELECT month_start, cpu_cores, ram_gib, disk_gib, disk_key, region_key,
+                    vat_included, traffic_gib, traffic_unlimited,
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY provider_median_rub) AS median_rub,
+                    min(provider_median_rub) AS min_provider_median_rub,
+                    max(provider_median_rub) AS max_provider_median_rub,
+                    count(DISTINCT provider_code)::bigint AS provider_count
+             FROM provider_medians
+             GROUP BY month_start, cpu_cores, ram_gib, disk_gib, disk_key, region_key,
+                      vat_included, traffic_gib, traffic_unlimited
+             HAVING count(DISTINCT provider_code) >= 2
+           )
+           SELECT own.month_start, own.plan_key, own.plan_name,
+                  own.cpu_cores, own.ram_gib, own.disk_gib, own.disk_type, own.region,
+                  own.price_rub, market.median_rub AS market_median_rub,
+                  market.min_provider_median_rub, market.max_provider_median_rub,
+                  market.provider_count AS providers_at_median,
+                  (own.price_rub / nullif(market.median_rub, 0) - 1.0) * 100.0 AS gap_percent
+           FROM monthly own
+           JOIN market USING (month_start, cpu_cores, ram_gib, disk_gib,
+                              disk_key, region_key, vat_included,
+                              traffic_gib, traffic_unlimited)
+           WHERE own.provider_code = 'aeza'
+           ORDER BY own.plan_key, own.month_start DESC
+           LIMIT 10000"#,
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|error| {
+        eprintln!("price benchmark history query failed: {error}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     Ok(Json(rows))
@@ -1466,11 +1722,11 @@ mod tests {
             short_term_share: Some(0.0),
             no_auto_prolong_share: Some(1.0),
             prolong_wait_share: Some(1.0),
-            failed_prolong_share: Some(1.0),
+            failed_prolong_share: None,
             expiring_revenue_share: Some(1.0),
             upcoming_payments: 1000,
             spendable_balance: 0,
-            payment_coverage: 0.0,
+            payment_coverage: Some(0.0),
         };
         let risk = calculate_snapshot_risk(&client, 500, &settings);
         assert_eq!(risk.score, 100);
@@ -1555,12 +1811,12 @@ mod tests {
             expiring_revenue_share: None,
             upcoming_payments: 0,
             spendable_balance: 0,
-            payment_coverage: 10.0,
+            payment_coverage: None,
         };
         let settings: SnapshotSettings = serde_json::from_str(r#"{"weights":{"paymentCoverage":35,"noAutoProlong":15,"prolongWait":15,"failedProlong":10,"expiringRevenue":25},"mediumThreshold":35,"highThreshold":65,"renewalWindowDays":14}"#).unwrap();
         let risk = calculate_snapshot_risk(&client, 0, &settings);
         assert_eq!(risk.score, 0);
-        assert_eq!(risk.level, "low");
+        assert_eq!(risk.level, "insufficient");
         assert_eq!(risk.upcoming_cents, 0);
         assert!(risk.factors.iter().all(|factor| factor.severity == 0.0));
     }

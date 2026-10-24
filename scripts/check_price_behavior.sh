@@ -56,13 +56,18 @@ for _ in {1..30}; do
 done
 if [[ "$ready" != 1 ]]; then cat "$tmp/api.log" >&2; exit 1; fi
 curl -fsS "http://127.0.0.1:$port/api/market/prices/behavior" -o "$tmp/behavior.json"
+curl -fsS "http://127.0.0.1:$port/api/market/prices/benchmarks/history" -o "$tmp/benchmarks.json"
+curl -fsS "http://127.0.0.1:$port/api/client/data-quality" -o "$tmp/data-quality.json"
 CHECK_DIR="$tmp" EXPECTED_COUNTS="$expected" python3 - <<'PY'
 import json, os
 from pathlib import Path
 p = Path(os.environ['CHECK_DIR'])
 cohorts = json.loads((p/'cohorts.json').read_text())
 rows = json.loads((p/'behavior.json').read_text())
-assert isinstance(cohorts, list) and isinstance(rows, list)
+benchmarks = json.loads((p/'benchmarks.json').read_text())
+quality = json.loads((p/'data-quality.json').read_text())
+assert isinstance(cohorts, list) and isinstance(rows, list) and isinstance(benchmarks, list)
+assert isinstance(quality, dict) and isinstance(quality.get('unlinkedServiceNames'), list)
 for c in cohorts:
     assert 0 <= c['awaitingRenewal'] <= c['linkedServices']
     assert 0 <= c['inactiveServices'] <= c['linkedServices']
@@ -79,7 +84,15 @@ for r in rows:
     assert r['performedRenewals'] >= 0 and r['prolongWaitEntries'] >= 0
     assert 0 <= r['prolongWaitServices'] <= r['services']
     assert r['previousMinor'] != r['currentMinor']
-print(f"API: {len(cohorts)} тарифных групп, {len(rows)} строк анализа цены и поведения")
+for point in benchmarks:
+    assert point['providersAtMedian'] >= 2
+    assert point['priceRub'] > 0 and point['marketMedianRub'] > 0
+    assert abs(point['gapPercent'] - (point['priceRub'] / point['marketMedianRub'] - 1) * 100) < 0.02
+outcomes = quality.get('renewalOutcomes', {})
+assert outcomes.get('confirmedFailed') == 0
+assert outcomes.get('unknown') == quality.get('ambiguousProlongs')
+print(f"API: {len(cohorts)} тарифных групп, {len(rows)} строк поведения, {len(benchmarks)} месячных бенчмарков")
+print(f"Не сопоставлено услуг: {quality.get('unlinkedServices', 0)}; исход неизвестен у {outcomes.get('unknown', 0)} продлений")
 if not rows:
     print('Изменений цены с двумя наблюдениями пока нет; исторический вывод недоступен')
 elif not any(r['completeFollowup'] and r['completeEventCoverage'] and r['services'] >= 5 and r['performedRenewals'] >= 3 for r in rows):

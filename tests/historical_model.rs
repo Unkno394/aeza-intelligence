@@ -314,7 +314,7 @@ fn legacy_model_state_upgrades_while_preserving_the_existing_profile() {
 
     let upgraded = HistoricalModel::from_json(&legacy.to_string()).unwrap();
     let saved: serde_json::Value = serde_json::from_str(&upgraded.to_json().unwrap()).unwrap();
-    assert_eq!(saved["model_version"], serde_json::json!(3));
+    assert_eq!(saved["model_version"], serde_json::json!(4));
     assert_eq!(
         upgraded
             .behavior_graph()

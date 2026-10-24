@@ -55,10 +55,10 @@ async fn main() -> Result<()> {
         .migrate()
         .await?;
     let dates: Vec<(String, NaiveDate)> = sqlx::query_as(
-        "SELECT DISTINCT p.currency::text, p.observed_at::date FROM market_intelligence.tariff_prices p \
+        "SELECT DISTINCT p.currency::text, (p.observed_at AT TIME ZONE 'UTC')::date FROM market_intelligence.tariff_prices p \
          WHERE p.currency IN ('EUR', 'USD') AND p.price_minor IS NOT NULL \
          AND NOT EXISTS (SELECT 1 FROM market_intelligence.exchange_rates fx \
-           WHERE fx.base = p.currency AND fx.quote = 'RUB' AND fx.requested_on = p.observed_at::date) \
+           WHERE fx.base = p.currency AND fx.quote = 'RUB' AND fx.requested_on = (p.observed_at AT TIME ZONE 'UTC')::date) \
          ORDER BY 1, 2",
     )
     .fetch_all(&pool)

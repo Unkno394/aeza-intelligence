@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// A timestamp in milliseconds since the Unix epoch.
 pub type Timestamp = i64;
-pub const HISTORICAL_MODEL_VERSION: u32 = 3;
+pub const HISTORICAL_MODEL_VERSION: u32 = 4;
 const PERSONAL_SEQUENCE_WINDOW: usize = 3;
 const MIN_PERSONAL_SEQUENCE_WINDOWS: usize = 3;
 const PERSONAL_SEQUENCE_NOVELTY: f64 = 0.8;
@@ -40,12 +40,7 @@ impl Default for HistoricalConfig {
                 "services_count".to_owned(),
                 "monthly_spend".to_owned(),
                 "spendable_balance".to_owned(),
-                "payment_coverage".to_owned(),
                 "upcoming_payments".to_owned(),
-                "no_auto_prolong_share".to_owned(),
-                "prolong_wait_share".to_owned(),
-                "failed_prolong_share".to_owned(),
-                "expiring_revenue_share".to_owned(),
             ]),
             short_half_life_ms: 7.0 * 24.0 * 60.0 * 60.0 * 1_000.0,
             long_half_life_ms: 90.0 * 24.0 * 60.0 * 60.0 * 1_000.0,
@@ -421,12 +416,42 @@ impl HistoricalModel {
         if model.model_version < HISTORICAL_MODEL_VERSION {
             let current = HistoricalConfig::default();
             model.config.minimum_familiarity = current.minimum_familiarity;
-            if model.config.expected_features.is_empty() {
-                model.config.expected_features = current.expected_features;
-            }
+            // A missing payment is not a 10x coverage value, and
+            // not_performed is not a confirmed failed renewal. Keep the
+            // online profile for facts we can always observe, then let
+            // optional service/coverage features contribute when present.
+            model.config.expected_features = current.expected_features;
+            model.features.remove("failed_prolong_share");
+            model.features.remove("payment_coverage");
+            model.purge_legacy_event_kind("prolong_failed");
             model.model_version = HISTORICAL_MODEL_VERSION;
         }
         Ok(model)
+    }
+
+    fn purge_legacy_event_kind(&mut self, kind: &str) {
+        self.recent_events.retain(|(_, event)| event != kind);
+        self.last_events.retain(|_, (event, _)| event != kind);
+        self.event_sequences.retain(|_, events| {
+            events.retain(|event| event.kind != kind);
+            !events.is_empty()
+        });
+        self.graph.transitions.retain(|from, edges| {
+            edges.remove(kind);
+            !edges.is_empty() && from != kind
+        });
+        self.graph.outgoing_counts = self
+            .graph
+            .transitions
+            .iter()
+            .map(|(from, edges)| {
+                (
+                    from.clone(),
+                    edges.values().map(|profile| profile.count).sum(),
+                )
+            })
+            .collect();
+        self.graph.total_transitions = self.graph.outgoing_counts.values().sum();
     }
 
     pub fn behavior_graph(&self) -> &BehaviorGraph {

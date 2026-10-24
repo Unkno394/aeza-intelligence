@@ -394,6 +394,9 @@ fn parse_contabo(document: &Html) -> Vec<Offer> {
             let get = |index: usize| row.get(index).map(String::as_str).unwrap_or("");
             let storage = get(storage_col);
             let price_text = get(price_col);
+            if !price_text.contains('€') && !price_text.contains('$') {
+                continue;
+            }
             if let Some(price) = contabo_money_minor(price_text) {
                 offers.push(Offer {
                     plan_key: name.to_owned(),
@@ -577,6 +580,33 @@ fn number_before_marker(value: &str, marker: &str) -> Option<i32> {
         .ok()
 }
 
+fn disk_before_kind(description: &str, kind: &str) -> Option<i32> {
+    let lower = description.to_lowercase();
+    let kind_at = lower.find(kind)?;
+    let before = &lower[..kind_at];
+    let unit_at = before
+        .rfind("gb")
+        .into_iter()
+        .chain(before.rfind("tb"))
+        .max()?;
+    let unit = &before[unit_at..unit_at + 2];
+    let raw = before[..unit_at].trim_end();
+    let amount = raw
+        .rsplit(|character: char| {
+            !character.is_ascii_digit() && character != '.' && character != ','
+        })
+        .find(|part| !part.is_empty())?
+        .replace(',', ".")
+        .parse::<f64>()
+        .ok()?;
+    let gib = if unit == "tb" {
+        amount * 1024.0
+    } else {
+        amount
+    };
+    (gib.is_finite() && gib > 0.0 && gib <= i32::MAX as f64).then_some(gib.round() as i32)
+}
+
 fn parse_contabo_json_ld(document: &Html) -> Vec<Offer> {
     let scripts = selector("script[type='application/ld+json']");
     let mut offers = Vec::new();
@@ -599,16 +629,11 @@ fn parse_contabo_json_ld(document: &Html) -> Vec<Offer> {
         let cpu = [" vcpu", " physical cpu cores", " core", " cores"]
             .iter()
             .find_map(|marker| number_before_marker(description, marker));
-        let ram = description.to_lowercase().find("ram").and_then(|index| {
-            let start = index.saturating_sub(12);
-            memory_mib(&description[start..index + 3])
-        });
-        let disk = ["nvme", "ssd", "hdd"].iter().find_map(|kind| {
-            description.to_lowercase().find(kind).and_then(|index| {
-                let start = index.saturating_sub(12);
-                disk_gib(&description[start..index + kind.len()])
-            })
-        });
+        let ram =
+            number_before_marker(description, " ram").and_then(|amount| amount.checked_mul(1024));
+        let disk = ["nvme", "ssd", "hdd"]
+            .iter()
+            .find_map(|kind| disk_before_kind(description, kind));
         let Some(price) = value["offers"]
             .as_array()
             .and_then(|offers| offers.iter().find(|offer| offer["priceCurrency"] == "EUR"))
@@ -914,5 +939,36 @@ mod tests {
         assert!(offer.vat_included.unwrap());
         assert!(offer.raw_excerpt.contains("Unlimited Traffic"));
         assert!(offer.raw_excerpt.contains("200 Mbit/s"));
+    }
+
+    #[test]
+    fn contabo_archive_grid_reads_monthly_price_and_specs() {
+        let html = r#"<div class="pricing-table vps">
+          <div><span class="row-title">Cloud VPS 1</span></div>
+          <div><span class="spec-title">4 vCPU Cores</span></div>
+          <div><span class="spec-title">6 GB RAM</span></div>
+          <div><span class="spec-title">100 GB NVMe</span><span>or 400 GB SSD</span></div>
+          <div><span class="spec-title">32 TB Traffic</span></div>
+          <div class="price">€4.50 <span>/ month</span></div>
+        </div>"#;
+        let offers = parse_html("contabo", html);
+        assert_eq!(offers.len(), 1);
+        assert!(offers[0].is_complete());
+        assert_eq!(offers[0].price_minor, Some(450));
+        assert_eq!(offers[0].disk_type.as_deref(), Some("NVMe"));
+    }
+
+    #[test]
+    fn contabo_archive_json_ld_reads_decimal_terabyte_disk() {
+        let html = r#"<script type="application/ld+json">{
+          "@type":"Product","name":"Storage VPS 40",
+          "description":"8 vCPU Cores, 30 GB RAM, 1.2 TB SSD, Unlimited Traffic",
+          "offers":[{"priceCurrency":"EUR","lowPrice":25.5}]
+        }</script>"#;
+        let offers = parse_html("contabo", html);
+        assert_eq!(offers.len(), 1);
+        assert!(offers[0].is_complete());
+        assert_eq!(offers[0].disk_gib, Some(1229));
+        assert_eq!(offers[0].price_minor, Some(2550));
     }
 }
