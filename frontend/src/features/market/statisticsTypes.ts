@@ -1,0 +1,4 @@
+import type {Sensitivity} from './api';
+export interface StatisticsPoint {seed:number;profit_rub:number;exact_profit_rub:string;revenue_rub:number;final_active:number;loss_events:number}
+export interface StrategyStatistics {strategy:string;profit:{min_rub:number;max_rub:number;median_rub:number;p025_rub:number;p25_rub:number;p75_rub:number;p975_rub:number;sample_sd_rub:number};loss_runs:number;loss_probability_percent:number;loss_probability_ci95_percent:[number,number];sole_wins:number;tied_wins:number;leading_percent:number;leading_ci95_percent:[number,number];points:StatisticsPoint[]}
+export interface SeedStatistics {engine_version:string;currency:'RUB';seeds:number[];seed_count:number;sensitivity:Sensitivity;scenario:unknown;catalog_sha256:string;replay_sha256:string;tied_seed_count:number;strategies:StrategyStatistics[];limitations:string[]}

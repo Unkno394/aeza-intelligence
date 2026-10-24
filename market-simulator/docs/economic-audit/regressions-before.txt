@@ -1,0 +1,31 @@
+   Compiling aeza-market-simulator v0.1.0 (/Users/timofej/Documents/Codex/2026-10-23/aeza-aeza-intelligence-market-simulator-vps/work/economic-audit/market-simulator)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
+     Running tests/economic_regressions.rs (work/build-target/debug/deps/economic_regressions-4891dff8990bf937)
+
+running 2 tests
+test exact_utility_ties_follow_documented_global_plan_id_order ... FAILED
+test zero_buyers_is_a_valid_empty_market_with_fixed_expenses ... FAILED
+
+failures:
+
+---- exact_utility_ties_follow_documented_global_plan_id_order stdout ----
+
+thread 'exact_utility_ties_follow_documented_global_plan_id_order' (2289216) panicked at tests/economic_regressions.rs:12:40:
+assertion `left == right` failed: equal utility must not always privilege competitors over Aéza
+  left: 0
+ right: 10
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- zero_buyers_is_a_valid_empty_market_with_fixed_expenses stdout ----
+
+thread 'zero_buyers_is_a_valid_empty_market_with_fixed_expenses' (2289217) panicked at tests/economic_regressions.rs:5:33:
+an empty market is a valid economic scenario: "months: 1..24; buyers_per_month: 1..1000"
+
+
+failures:
+    exact_utility_ties_follow_documented_global_plan_id_order
+    zero_buyers_is_a_valid_empty_market_with_fixed_expenses
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test economic_regressions`

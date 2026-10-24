@@ -1,0 +1,24 @@
+   Compiling aeza-market-simulator v0.1.0 (/Users/timofej/Documents/Codex/2026-10-23/aeza-aeza-intelligence-market-simulator-vps/work/economic-audit/market-simulator)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.80s
+     Running tests/economic_regressions.rs (work/build-target/debug/deps/economic_regressions-4891dff8990bf937)
+
+running 1 test
+test financial_values_and_market_shares_preserve_bits_across_json ... FAILED
+
+failures:
+
+---- financial_values_and_market_shares_preserve_bits_across_json stdout ----
+
+thread 'financial_values_and_market_shares_preserve_bits_across_json' (2295438) panicked at tests/economic_regressions.rs:19:9:
+assertion `left == right` failed: JSON must preserve financial/report values: 195.95999999999998
+  left: 4641098746118767902
+ right: 4641098746118767903
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    financial_values_and_market_shares_preserve_bits_across_json
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test economic_regressions`

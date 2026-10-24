@@ -34,6 +34,9 @@ enum Command {
         /// Apply pending migrations before loading.
         #[arg(long)]
         migrate: bool,
+        /// Exit successfully without loading when the client tables already have rows.
+        #[arg(long)]
+        skip_if_loaded: bool,
     },
     /// Compare client risk vectors (robust deviations, Mahalanobis, k-NN, peers, correlations).
     Analyze {
@@ -71,11 +74,19 @@ async fn main() -> anyhow::Result<()> {
             adapter.rollback(to).await?;
             println!("Rolled back to version {to}");
         }
-        Command::Load { path, migrate } => {
+        Command::Load {
+            path,
+            migrate,
+            skip_if_loaded,
+        } => {
             let data = Dataset::from_path(&path)
                 .with_context(|| format!("failed to load {}", path.display()))?;
             if migrate {
                 adapter.migrate().await?;
+            }
+            if skip_if_loaded && adapter.has_client_data().await? {
+                println!("Client tables already contain data, skipping load");
+                return Ok(());
             }
             let report = adapter.load(&data).await?;
             println!(

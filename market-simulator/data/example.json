@@ -1,0 +1,176 @@
+{
+  "seed": 42,
+  "months": 6,
+  "buyers_per_month": 100,
+  "arrival_weights": [
+    0.9437148106089883,
+    1.0594719287502157,
+    0.820074079799283,
+    1.1022432029108724,
+    1.090043223125264,
+    0.9844527548053771
+  ],
+  "segments": [
+    {
+      "name": "small",
+      "weight": 0.6,
+      "budget_min": 4,
+      "budget_max": 15,
+      "vcpu": 1,
+      "ram_gb": 1,
+      "disk_gb": 20,
+      "region": null
+    },
+    {
+      "name": "medium",
+      "weight": 0.3,
+      "budget_min": 12,
+      "budget_max": 35,
+      "vcpu": 2,
+      "ram_gb": 4,
+      "disk_gb": 40,
+      "region": null
+    },
+    {
+      "name": "large",
+      "weight": 0.1,
+      "budget_min": 30,
+      "budget_max": 70,
+      "vcpu": 4,
+      "ram_gb": 8,
+      "disk_gb": 80,
+      "region": null
+    }
+  ],
+  "aeza_plans": [
+    {
+      "id": "aeza-scenario-1",
+      "provider": "aeza",
+      "name": "Scenario 1",
+      "vcpu": 1,
+      "ram_gb": 2,
+      "disk_gb": 30,
+      "monthly_usd": 5,
+      "regions": [
+        "EU"
+      ],
+      "origin": "scenario_assumption",
+      "source": "scenario://example/not-observed-aeza-tariff",
+      "observed_at": ""
+    },
+    {
+      "id": "aeza-scenario-2",
+      "provider": "aeza",
+      "name": "Scenario 2",
+      "vcpu": 2,
+      "ram_gb": 4,
+      "disk_gb": 60,
+      "monthly_usd": 10,
+      "regions": [
+        "EU"
+      ],
+      "origin": "scenario_assumption",
+      "source": "scenario://example/not-observed-aeza-tariff",
+      "observed_at": ""
+    },
+    {
+      "id": "aeza-scenario-3",
+      "provider": "aeza",
+      "name": "Scenario 3",
+      "vcpu": 4,
+      "ram_gb": 8,
+      "disk_gb": 100,
+      "monthly_usd": 20,
+      "regions": [
+        "EU"
+      ],
+      "origin": "scenario_assumption",
+      "source": "scenario://example/not-observed-aeza-tariff",
+      "observed_at": ""
+    }
+  ],
+  "strategies": [
+    {
+      "name": "baseline",
+      "aeza_price_multipliers": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "discount_20",
+      "aeza_price_multipliers": [
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8,
+        0.8
+      ]
+    },
+    {
+      "name": "increase_20",
+      "aeza_price_multipliers": [
+        1.2,
+        1.2,
+        1.2,
+        1.2,
+        1.2,
+        1.2
+      ]
+    },
+    {
+      "name": "intro_then_increase",
+      "aeza_price_multipliers": [
+        0.8,
+        0.8,
+        1,
+        1,
+        1.2,
+        1.2
+      ]
+    }
+  ],
+  "sensitivities": [
+    "low",
+    "medium",
+    "high"
+  ],
+  "monthly_departure_probability": 0.05,
+  "switching_cost_utility": 0.2,
+  "outside_option_utility": 0,
+  "preference_strength": 1,
+  "aeza_variable_cost_usd": 3,
+  "aeza_fixed_cost_usd": 100,
+  "external_models": [],
+  "market_events": [],
+  "market": "all",
+  "accepted_service_types": [
+    "vps"
+  ],
+  "required_virtualization": null,
+  "required_cpu_class": null,
+  "require_complete_monthly_payment": false,
+  "aeza_capacity": {
+    "vcpu": 10000,
+    "ram_gb": 20000,
+    "storage_gb": 500000,
+    "origin": "scenario_assumption",
+    "source": "scenario://default-logical-resource-pool-not-observed-stock"
+  },
+  "currency": "USD",
+  "valuation_fx": {
+    "date": "2026-10-24",
+    "source": "https://www.cbr.ru/scripts/XML_daily.asp",
+    "rub_per_unit": {
+      "RUB": "1",
+      "USD": "80.5381",
+      "EUR": "90.2429"
+    },
+    "rounding": "half_even_9_USD_decimals"
+  }
+}

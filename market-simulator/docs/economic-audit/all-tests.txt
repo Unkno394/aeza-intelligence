@@ -1,0 +1,67 @@
+   Compiling aeza-market-simulator v0.1.0 (/Users/timofej/Desktop/aeza/aeza-intelligence/market-simulator)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.07s
+     Running unittests src/lib.rs (work/build-target/debug/deps/aeza_market_simulator-458717ea7a8d957b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (work/build-target/debug/deps/aeza_market_simulator-6fbdaf9de413f580)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/api.rs (work/build-target/debug/deps/api-32fd75aa7cc6e5d1)
+
+running 3 tests
+test oversized_body_is_rejected ... ok
+test read_endpoints ... ok
+test simulate_and_validation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/economic_matrix.rs (work/build-target/debug/deps/economic_matrix-6aded80dd4941590)
+
+running 2 tests
+84 engine economic cases and relational assertions passed
+test economic_engine_matrix ... ok
+84 HTTP economic cases and relational assertions passed
+test economic_http_tcp_matrix ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+
+     Running tests/economic_regressions.rs (work/build-target/debug/deps/economic_regressions-5e001f2fd58a97a3)
+
+running 3 tests
+test financial_values_and_market_shares_preserve_bits_across_json ... ok
+test exact_utility_ties_follow_documented_global_plan_id_order ... ok
+test zero_buyers_is_a_valid_empty_market_with_fixed_expenses ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/simulator.rs (work/build-target/debug/deps/simulator-24d0139d126c3346)
+
+running 14 tests
+test departure_is_not_same_period_repurchase ... ok
+test invalid_inputs_are_errors ... ok
+test accounting_and_conservation ... ok
+test external_probabilities_and_provenance ... ok
+test budget_excludes_all_plans ... ok
+test high_sensitivity_can_choose_outside ... ok
+test price_change_causes_switches_at_renewal ... ok
+test no_price_change_strategies_match ... ok
+test catalog_order_does_not_change_run ... ok
+test resource_requirements_are_hard_constraints ... ok
+test replay_is_byte_identical ... ok
+test unknown_region_is_not_a_match ... ok
+test bundled_data_quality_and_example ... ok
+test lifecycle_stock_flow_identity ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Doc-tests aeza_market_simulator
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

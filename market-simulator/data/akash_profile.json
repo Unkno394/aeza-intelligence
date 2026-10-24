@@ -1,0 +1,27 @@
+{
+  "months": [
+    "2026-04",
+    "2026-05",
+    "2026-06",
+    "2026-07",
+    "2026-08",
+    "2026-09"
+  ],
+  "new_lease_events": [
+    26455,
+    29700,
+    22989,
+    30899,
+    30557,
+    27597
+  ],
+  "normalized_weights": [
+    0.9437148106089883,
+    1.0594719287502157,
+    0.820074079799283,
+    1.1022432029108724,
+    1.090043223125264,
+    0.9844527548053771
+  ],
+  "interpretation": "Observed Akash aggregate event shape; transfer and population scale are scenario assumptions, not VPS demand estimates."
+}

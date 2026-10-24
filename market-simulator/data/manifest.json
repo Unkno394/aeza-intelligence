@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "prepared_as_of": "2026-10-23",
+  "source_files": [
+    {
+      "file": "vps-price-index-current-2026-10-23.json",
+      "sha256": "dff80c1b1ae080c2cc9cf3627284e2f43fb0e14b66d6926bfde988e957f231b8"
+    },
+    {
+      "file": "vps-price-index-history-2026-10-23.json",
+      "sha256": "3ead1d0e1264ff4f858712df4feea254c751ed5fa8a90eb8ae1d7063b4526aa6"
+    },
+    {
+      "file": "akash_daily_market_stats.csv",
+      "sha256": "cd4f58b36c5d93df1fc57bb6813c32d8f4ec0beab400cf543562233156a44276"
+    },
+    {
+      "file": "akash_historical_leases.csv.gz",
+      "sha256": "ee5f6d91a8f46130a10b76e3de20edebd75cffe0e58f6e8c773c6b79b589a2c4"
+    }
+  ],
+  "catalog_included": 322,
+  "catalog_excluded": {
+    "arm_or_gpu_name": 6,
+    "not_vps_or_missing_positive_monthly_usd_specs": 205
+  },
+  "license": "VPS Price Index — vpslocate.com (CC-BY 4.0), https://vpslocate.com/data/",
+  "limitations": [
+    "List prices are not transactions or demand. Taxes, stock, architecture, IP and regional comparability are not fully verified.",
+    "Akash container leases are not interchangeable with VPS. No elasticity, churn or customer budgets inferred.",
+    "Akash exact lease UTC absent; resource joins partial. Block duration is never converted to a calendar lifetime.",
+    "Index history is changing-composition aggregate min/median/max, not a per-plan price panel.",
+    "Aéza offers and all costs in example are scenario assumptions."
+  ]
+}

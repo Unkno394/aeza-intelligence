@@ -5,6 +5,22 @@ adapts the Welford embedding, transition graph, and LCS ideas from the local
 `/home/user/Documents/antifrod/backend/src/fraud` project to service and
 payment behavior. No training data is required before the first observation.
 
+## Quick start
+
+```sh
+docker compose up -d --build
+```
+
+Open http://127.0.0.1:8080. Compose starts PostgreSQL (user, password and
+database `aeza`, published on host port 5433), applies migrations, loads
+`scripts/data.json` when the client tables are empty, and runs the API, daily
+client snapshots, the competitor tariff and EUR→RUB collector (daily), the
+Market Simulator and the frontend behind nginx. Search interest is collected
+only when `TRENDSMCP_API_KEY` is set in `.env`; the Market Intelligence map
+needs a Google Trends CSV import (`google_trends_import`). Ports and credentials
+can be overridden in `.env` (see `.env.example`). `docker compose down -v`
+removes everything, including the data.
+
 ## Inputs
 
 - Pass a numeric feature map to `HistoricalModel::observe` for each customer
@@ -87,8 +103,8 @@ run `bash scripts/migrate_database.sh`. This applies the market migrations
 database. Customer tables live in `public`; market tables live in
 `market_intelligence`. The script verifies that all required tables exist and
 prints row counts. It does not create or replace a database. Docker Compose
-also uses this `DATABASE_URL` and does not start a second PostgreSQL service.
-It runs the API and an hourly check for daily client snapshots after migration.
+runs its own PostgreSQL service unless `DATABASE_URL` (or `DB_*`) points
+elsewhere; see [Quick start](#quick-start).
 
 The client schema compatibility step recognises the former `scripts/001_schema.sql`
 tables, checks their required columns and converts their enum fields to text
@@ -96,8 +112,7 @@ without deleting rows. SQLx then adds `admins`, `operation_logs`, the feature
 functions and `client_snapshots`. A partial or unfamiliar client schema causes
 the migration to stop with an explicit error for inspection.
 
-Start the API and snapshot scheduler against the existing database with
-`docker compose up -d --build api snapshots`. The API listens on
+Outside Docker, start the API with `cargo run --bin market_api`. It listens on
 `127.0.0.1:3000`; the Vite frontend proxies `/api` there. The API serves
 `/api/client/dataset`, `/api/client/analysis`,
 `/api/client/historical/{id}`, and the three `/api/market/*` routes.

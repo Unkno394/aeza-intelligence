@@ -39,3 +39,18 @@ Google Trends CSV имеют разные источники; карта ост�
 
 Файлы `mocks/` оставлены для автономных тестов фронтенд-модели. В рабочем
 приложении `useAnalyzer` использует `HttpApi`, а не `mockApi`.
+
+## Market Simulator
+
+Страница `/market-simulator` работает с самостоятельным Rust Market API.
+Запустите его из корня проекта:
+`cargo run --locked --manifest-path market-simulator/Cargo.toml`.
+Vite проксирует `/api/market/v1` и `/api/market/v2` на `127.0.0.1:8091`
+(dev и preview), остальные `/api/*` идут в `market_api`. В production нужен
+такой же reverse proxy и SPA fallback.
+
+Страница загружает сценарий и каталог через API; результаты появляются только после POST /simulate. После изменения настроек старый отчет помечается как предыдущий. Ошибки API не заменяются демонстрационными ответами. Прибыль, бюджеты, отток и тарифы Aéza обозначены как сценарные; существующие Snapshot/Historical модели не подключены и не изменены. `npm test` включает тесты canonical сравнения сценариев.
+
+Стили симулятора лежат в `src/pages/market.css` и `src/features/market/competition.css`.
+Корневые классы у него `simulator-page`, `simulator-chart`, `simulator-state`:
+одноимённые `market-*` уже заняты страницей Market Intelligence в `index.css`.

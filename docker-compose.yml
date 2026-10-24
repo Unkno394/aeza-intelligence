@@ -1,56 +1,116 @@
-# Use the existing PostgreSQL database from DATABASE_URL for both customer and
-# market tables. On Linux, host networking lets containers reach 127.0.0.1.
+# Everything starts with one command:
 #
-#   docker compose run --rm migrate             # apply all migrations
-#   docker compose run --rm seed                # load scripts/data.json into empty tables
+#   docker compose up -d --build        # then open http://127.0.0.1:8080
+#
+# Order: db → migrate → seed (scripts/data.json, skipped when clients exist) →
+# api, snapshots, market collectors, simulator → frontend (nginx on FRONTEND_PORT).
+#
+# Database: the bundled `db` service, credentials default to aeza. Set DATABASE_URL
+# (or DB_USER, DB_PASSWORD, DB_NAME, DB_HOST, DB_PORT) to use another database.
+# Search interest is collected only when TRENDSMCP_API_KEY is set.
 
 name: aeza-intelligence
+
+x-database-url: &database-url ${DATABASE_URL:-postgres://${DB_USER:-aeza}:${DB_PASSWORD:-aeza}@${DB_HOST:-db}:${DB_PORT:-5432}/${DB_NAME:-aeza}}
 
 x-app: &app
   build: .
   image: aeza-intelligence:latest
-  network_mode: host
   environment:
-    DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+    DATABASE_URL: *database-url
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
 
 services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-aeza}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-aeza}
+      POSTGRES_DB: ${DB_NAME:-aeza}
+    ports:
+      - "${DB_PUBLISH_PORT:-5433}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   migrate:
     <<: *app
     command: ["migrate"]
-
-  api:
-    <<: *app
-    entrypoint: ["market_api"]
     depends_on:
-      migrate:
-        condition: service_completed_successfully
-
-  snapshots:
-    <<: *app
-    entrypoint: ["client_snapshot"]
-    command: ["--schedule"]
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-
-  trends:
-    <<: *app
-    profiles: ["collectors"]
-    entrypoint: ["search_interest"]
-    command: ["schedule"]
-    environment:
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
-      TRENDSMCP_API_KEY: ${TRENDSMCP_API_KEY:-}
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
+      db:
+        condition: service_healthy
 
   seed:
     <<: *app
-    profiles: ["seed"]
-    command: ["load", "/data/data.json"]
+    command: ["load", "--skip-if-loaded", "/data/data.json"]
     volumes:
       - ./scripts:/data:ro
+
+  api:
+    <<: *app
+    restart: unless-stopped
+    entrypoint: ["market_api"]
+    command: ["--listen", "0.0.0.0:3000"]
+
+  snapshots:
+    <<: *app
+    restart: unless-stopped
+    entrypoint: ["client_snapshot"]
+    command: ["--schedule"]
     depends_on:
-      migrate:
+      seed:
         condition: service_completed_successfully
+
+  # Competitor tariffs and EUR→RUB rates, refreshed daily. A failed source is
+  # logged and retried on the next round; already imported rows stay.
+  market-collector:
+    <<: *app
+    restart: unless-stopped
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        while true; do
+          market_import run --mode live --max-archives 0 || echo "market_import failed, retrying in 24h"
+          market_fx || echo "market_fx failed, retrying in 24h"
+          sleep 86400
+        done
+
+  trends:
+    <<: *app
+    restart: on-failure
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        if [ -z "$$TRENDSMCP_API_KEY" ]; then
+          echo "TRENDSMCP_API_KEY is not set: search interest collection is disabled"
+          exit 0
+        fi
+        exec search_interest schedule
+    environment:
+      DATABASE_URL: *database-url
+      TRENDSMCP_API_KEY: ${TRENDSMCP_API_KEY:-}
+
+  simulator:
+    build: ./market-simulator
+    image: aeza-market-simulator:latest
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    image: aeza-intelligence-frontend:latest
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      - api
+      - simulator
+
+volumes:
+  db-data:

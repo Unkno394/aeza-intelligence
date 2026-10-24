@@ -1,0 +1,3639 @@
+{
+  "dataset": "vps-price-index-history",
+  "title": "VPS Price Index — Daily History",
+  "source": "vpslocate.com",
+  "license": "CC-BY-4.0",
+  "attribution": "Data: vpslocate.com (CC-BY-4.0)",
+  "currency": "USD (EUR where noted)",
+  "generated_at": "2026-10-23T03:30:20Z",
+  "window": {
+    "start": "2026-05-11",
+    "end": "2026-10-23",
+    "days": 166
+  },
+  "note": "min/median/max of public list prices per UTC day, strictly separated by billing unit (hourly vs monthly). Mixed-unit aggregation is intentionally avoided.",
+  "daily": [
+    {
+      "date": "2026-05-11",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 5760.0,
+        "count": 513
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 119.605,
+        "max": 4045.83,
+        "count": 346
+      }
+    },
+    {
+      "date": "2026-05-12",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 5760.0,
+        "count": 513
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 119.605,
+        "max": 4045.83,
+        "count": 346
+      }
+    },
+    {
+      "date": "2026-05-13",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 141.9,
+        "max": 5760.0,
+        "count": 517
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 119.49,
+        "max": 4045.83,
+        "count": 350
+      }
+    },
+    {
+      "date": "2026-05-14",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 174
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 141.9,
+        "max": 5760.0,
+        "count": 1034
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 119.49,
+        "max": 4045.83,
+        "count": 700
+      }
+    },
+    {
+      "date": "2026-05-15",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 141.9,
+        "max": 5760.0,
+        "count": 517
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 119.49,
+        "max": 4045.83,
+        "count": 350
+      }
+    },
+    {
+      "date": "2026-05-16",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 141.9,
+        "max": 5760.0,
+        "count": 517
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 119.49,
+        "max": 4045.83,
+        "count": 350
+      }
+    },
+    {
+      "date": "2026-05-17",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 141.9,
+        "max": 5760.0,
+        "count": 517
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 119.49,
+        "max": 4045.83,
+        "count": 350
+      }
+    },
+    {
+      "date": "2026-05-18",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 141.9,
+        "max": 5760.0,
+        "count": 517
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 119.49,
+        "max": 4045.83,
+        "count": 350
+      }
+    },
+    {
+      "date": "2026-05-19",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-05-20",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-05-21",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-05-22",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-05-23",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-05-24",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-05-25",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-05-26",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-05-27",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-05-28",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-05-29",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-05-30",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 123.235,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-05-31",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 123.235,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-01",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 123.235,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-02",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-03",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 126.675,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-04",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 127.965,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-05",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 127.965,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-06",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 127.965,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-07",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 127.965,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-08",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 127.965,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-09",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 127.965,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-10",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 127.965,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-11",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 127.965,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-12",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 127.965,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-13",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 127.965,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-14",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 127.965,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-15",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 127.965,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-16",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 148.01,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 131.1645,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-17",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 261
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 148.01,
+        "max": 33404.8,
+        "count": 1575
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 131.1645,
+        "max": 30368.0,
+        "count": 1074
+      }
+    },
+    {
+      "date": "2026-06-18",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 148.01,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 131.1645,
+        "max": 30368.0,
+        "count": 358
+      }
+    },
+    {
+      "date": "2026-06-19",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 146.39,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 130.2959,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-20",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 146.39,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 130.2959,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-21",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 146.39,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 130.2959,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-22",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 163.9,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 149.0,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-23",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 146.39,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 130.2959,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-24",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 146.39,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 130.2959,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-25",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 146.39,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 130.2959,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-26",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 146.39,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 130.2959,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-27",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 146.39,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 130.2959,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-28",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 146.39,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 130.2959,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-29",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 146.39,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 130.2959,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-06-30",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 155.0,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 135.8445,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-07-01",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 155.0,
+        "max": 33404.8,
+        "count": 475
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 132.2595,
+        "max": 30368.0,
+        "count": 308
+      }
+    },
+    {
+      "date": "2026-07-02",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.0,
+        "max": 33404.8,
+        "count": 514
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 130.2959,
+        "max": 30368.0,
+        "count": 364
+      }
+    },
+    {
+      "date": "2026-07-03",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 160.0,
+        "max": 33404.8,
+        "count": 518
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 152.1355,
+        "max": 30368.0,
+        "count": 368
+      }
+    },
+    {
+      "date": "2026-07-04",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.29,
+        "max": 33404.8,
+        "count": 518
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 131.815,
+        "max": 30368.0,
+        "count": 368
+      }
+    },
+    {
+      "date": "2026-07-05",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.29,
+        "max": 33404.8,
+        "count": 518
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 131.815,
+        "max": 30368.0,
+        "count": 368
+      }
+    },
+    {
+      "date": "2026-07-06",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 144.29,
+        "max": 33404.8,
+        "count": 518
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 131.815,
+        "max": 30368.0,
+        "count": 368
+      }
+    },
+    {
+      "date": "2026-07-07",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-08",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-09",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-10",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-11",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-12",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-13",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-14",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-15",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-16",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-17",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-18",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-19",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-20",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-21",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-22",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 164.19,
+        "max": 33404.8,
+        "count": 544
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 161.9575,
+        "max": 30368.0,
+        "count": 394
+      }
+    },
+    {
+      "date": "2026-07-23",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 178.155,
+        "max": 33404.8,
+        "count": 488
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 174.895,
+        "max": 30368.0,
+        "count": 338
+      }
+    },
+    {
+      "date": "2026-07-24",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 163.9,
+        "max": 33404.8,
+        "count": 555
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 157.62,
+        "max": 30368.0,
+        "count": 405
+      }
+    },
+    {
+      "date": "2026-07-25",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 168.6445,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-07-26",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 168.6445,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-07-27",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 168.6445,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-07-28",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 168.6445,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-07-29",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 168.6445,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-07-30",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 168.6445,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-07-31",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 168.6445,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-08-01",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 168.6445,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-08-02",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 168.6445,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-08-03",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 168.6445,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-08-04",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 185.51,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 177.065,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-08-05",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 168.6445,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-08-06",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 564
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 168.6445,
+        "max": 30368.0,
+        "count": 414
+      }
+    },
+    {
+      "date": "2026-08-07",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 565
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 169.0,
+        "max": 30368.0,
+        "count": 415
+      }
+    },
+    {
+      "date": "2026-08-08",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 565
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 169.0,
+        "max": 30368.0,
+        "count": 415
+      }
+    },
+    {
+      "date": "2026-08-09",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 565
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 169.0,
+        "max": 30368.0,
+        "count": 415
+      }
+    },
+    {
+      "date": "2026-08-10",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 565
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 169.0,
+        "max": 30368.0,
+        "count": 415
+      }
+    },
+    {
+      "date": "2026-08-11",
+      "provider_count": 9,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 173.0,
+        "max": 33404.8,
+        "count": 565
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 169.0,
+        "max": 30368.0,
+        "count": 415
+      }
+    },
+    {
+      "date": "2026-08-12",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 184.92,
+        "max": 33404.8,
+        "count": 540
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-13",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 184.92,
+        "max": 33404.8,
+        "count": 540
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-14",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 184.92,
+        "max": 33404.8,
+        "count": 540
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-15",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 184.92,
+        "max": 33404.8,
+        "count": 540
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-16",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 184.92,
+        "max": 33404.8,
+        "count": 540
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-17",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 184.92,
+        "max": 33404.8,
+        "count": 540
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-18",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 184.92,
+        "max": 33404.8,
+        "count": 540
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-19",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 184.92,
+        "max": 33404.8,
+        "count": 540
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-20",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 181.96,
+        "max": 33404.8,
+        "count": 543
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-21",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 181.96,
+        "max": 33404.8,
+        "count": 543
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-22",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 181.96,
+        "max": 33404.8,
+        "count": 543
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-23",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 181.96,
+        "max": 33404.8,
+        "count": 543
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-24",
+      "provider_count": 8,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 181.96,
+        "max": 33404.8,
+        "count": 543
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-25",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 195.485,
+        "max": 33404.8,
+        "count": 522
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-26",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 195.485,
+        "max": 33404.8,
+        "count": 522
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-27",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 261
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 195.485,
+        "max": 33404.8,
+        "count": 1566
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 1170
+      }
+    },
+    {
+      "date": "2026-08-28",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 195.485,
+        "max": 33404.8,
+        "count": 522
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-29",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 195.485,
+        "max": 33404.8,
+        "count": 522
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-30",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 195.485,
+        "max": 33404.8,
+        "count": 522
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-08-31",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 195.485,
+        "max": 33404.8,
+        "count": 522
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-09-01",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 195.485,
+        "max": 33404.8,
+        "count": 522
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 186.845,
+        "max": 30368.0,
+        "count": 390
+      }
+    },
+    {
+      "date": "2026-09-02",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 192.0,
+        "max": 33404.8,
+        "count": 527
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 173.81,
+        "max": 30368.0,
+        "count": 395
+      }
+    },
+    {
+      "date": "2026-09-03",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 192.0,
+        "max": 33404.8,
+        "count": 527
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 173.81,
+        "max": 30368.0,
+        "count": 395
+      }
+    },
+    {
+      "date": "2026-09-04",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 192.0,
+        "max": 33404.8,
+        "count": 527
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 173.81,
+        "max": 30368.0,
+        "count": 395
+      }
+    },
+    {
+      "date": "2026-09-05",
+      "provider_count": 6,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 471
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 339
+      }
+    },
+    {
+      "date": "2026-09-06",
+      "provider_count": 6,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 471
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 339
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 192.0,
+        "max": 33404.8,
+        "count": 527
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 173.81,
+        "max": 30368.0,
+        "count": 395
+      }
+    },
+    {
+      "date": "2026-09-08",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 3.29,
+        "median": 192.0,
+        "max": 33404.8,
+        "count": 527
+      },
+      "price_monthly_eur": {
+        "min": 2.99,
+        "median": 173.81,
+        "max": 30368.0,
+        "count": 395
+      }
+    },
+    {
+      "date": "2026-09-09",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 195.0,
+        "max": 33404.8,
+        "count": 523
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 184.67,
+        "max": 30368.0,
+        "count": 391
+      }
+    },
+    {
+      "date": "2026-09-10",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 195.0,
+        "max": 33404.8,
+        "count": 523
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 184.67,
+        "max": 30368.0,
+        "count": 391
+      }
+    },
+    {
+      "date": "2026-09-11",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 195.0,
+        "max": 33404.8,
+        "count": 523
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 184.67,
+        "max": 30368.0,
+        "count": 391
+      }
+    },
+    {
+      "date": "2026-09-12",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 195.0,
+        "max": 33404.8,
+        "count": 523
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 184.67,
+        "max": 30368.0,
+        "count": 391
+      }
+    },
+    {
+      "date": "2026-09-13",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 195.0,
+        "max": 33404.8,
+        "count": 523
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 184.67,
+        "max": 30368.0,
+        "count": 391
+      }
+    },
+    {
+      "date": "2026-09-14",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 203.14,
+        "max": 33404.8,
+        "count": 519
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 193.36,
+        "max": 30368.0,
+        "count": 387
+      }
+    },
+    {
+      "date": "2026-09-15",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 203.14,
+        "max": 33404.8,
+        "count": 519
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 193.36,
+        "max": 30368.0,
+        "count": 387
+      }
+    },
+    {
+      "date": "2026-09-16",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 195.0,
+        "max": 33404.8,
+        "count": 523
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 184.67,
+        "max": 30368.0,
+        "count": 391
+      }
+    },
+    {
+      "date": "2026-09-17",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-18",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-19",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-20",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-21",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-22",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-23",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-24",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-25",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-26",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-27",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-28",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-29",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-09-30",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-10-01",
+      "provider_count": 6,
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 246.8,
+        "max": 33404.8,
+        "count": 444
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-10-02",
+      "provider_count": 6,
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 250.815,
+        "max": 33404.8,
+        "count": 444
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-10-03",
+      "provider_count": 6,
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 246.8,
+        "max": 33404.8,
+        "count": 444
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-10-04",
+      "provider_count": 6,
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 246.8,
+        "max": 33404.8,
+        "count": 444
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-10-05",
+      "provider_count": 6,
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 246.8,
+        "max": 33404.8,
+        "count": 444
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-10-06",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 212.7,
+        "max": 33404.8,
+        "count": 531
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 201.188,
+        "max": 30368.0,
+        "count": 399
+      }
+    },
+    {
+      "date": "2026-10-07",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 227.04,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 210.11,
+        "max": 30368.0,
+        "count": 393
+      }
+    },
+    {
+      "date": "2026-10-08",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 227.04,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 219.0,
+        "max": 30368.0,
+        "count": 393
+      }
+    },
+    {
+      "date": "2026-10-09",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 227.04,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 219.0,
+        "max": 30368.0,
+        "count": 393
+      }
+    },
+    {
+      "date": "2026-10-10",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 227.04,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 219.0,
+        "max": 30368.0,
+        "count": 393
+      }
+    },
+    {
+      "date": "2026-10-11",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 227.04,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 219.0,
+        "max": 30368.0,
+        "count": 393
+      }
+    },
+    {
+      "date": "2026-10-12",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 227.04,
+        "max": 33404.8,
+        "count": 525
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 219.0,
+        "max": 30368.0,
+        "count": 393
+      }
+    },
+    {
+      "date": "2026-10-13",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 240.9,
+        "max": 49272.08,
+        "count": 533
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 233.016,
+        "max": 44792.8,
+        "count": 401
+      }
+    },
+    {
+      "date": "2026-10-14",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 240.9,
+        "max": 49272.08,
+        "count": 533
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 233.016,
+        "max": 44792.8,
+        "count": 401
+      }
+    },
+    {
+      "date": "2026-10-15",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 240.9,
+        "max": 49272.08,
+        "count": 533
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 233.016,
+        "max": 44792.8,
+        "count": 401
+      }
+    },
+    {
+      "date": "2026-10-16",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 240.9,
+        "max": 51343.82,
+        "count": 533
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 233.016,
+        "max": 46676.2,
+        "count": 401
+      }
+    },
+    {
+      "date": "2026-10-17",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 240.9,
+        "max": 51343.82,
+        "count": 533
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 233.016,
+        "max": 46676.2,
+        "count": 401
+      }
+    },
+    {
+      "date": "2026-10-18",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 240.9,
+        "max": 51343.82,
+        "count": 533
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 233.016,
+        "max": 46676.2,
+        "count": 401
+      }
+    },
+    {
+      "date": "2026-10-19",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 240.9,
+        "max": 51343.82,
+        "count": 533
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 233.016,
+        "max": 46676.2,
+        "count": 401
+      }
+    },
+    {
+      "date": "2026-10-20",
+      "provider_count": 6,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 256.32,
+        "max": 51343.82,
+        "count": 483
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 258.54,
+        "max": 46676.2,
+        "count": 351
+      }
+    },
+    {
+      "date": "2026-10-21",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 240.9,
+        "max": 51343.82,
+        "count": 533
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 233.016,
+        "max": 46676.2,
+        "count": 401
+      }
+    },
+    {
+      "date": "2026-10-22",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 240.9,
+        "max": 51343.82,
+        "count": 533
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 233.016,
+        "max": 46676.2,
+        "count": 401
+      }
+    },
+    {
+      "date": "2026-10-23",
+      "provider_count": 7,
+      "price_hourly_usd": {
+        "min": 0.005,
+        "median": 0.197,
+        "max": 5.26,
+        "count": 87
+      },
+      "price_monthly_usd": {
+        "min": 0.48,
+        "median": 240.9,
+        "max": 51343.82,
+        "count": 533
+      },
+      "price_monthly_eur": {
+        "min": 0.438,
+        "median": 233.016,
+        "max": 46676.2,
+        "count": 401
+      }
+    }
+  ]
+}

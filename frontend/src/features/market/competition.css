@@ -1,0 +1,5 @@
+.market-competition h3{margin:24px 0 12px;font-size:16px}
+.simulator-page .market-competition td{vertical-align:top}
+.simulator-page .market-competition .competition-regions{white-space:normal;min-width:180px;max-width:240px;line-height:1.65}
+.market-competition .competition-regions details{font-size:11px;margin-top:6px;color:var(--muted)}
+.market-competition .competition-regions summary{cursor:pointer;text-decoration:underline;text-underline-offset:3px}

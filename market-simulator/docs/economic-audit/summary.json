@@ -1,0 +1,17 @@
+{
+  "engine_version": "market-v1.1",
+  "seed": 42,
+  "economic_scenarios_per_transport": 75,
+  "relational_checks_per_transport": 9,
+  "matrix_records": 168,
+  "rust_test_functions": 22,
+  "standalone_http_scenarios": 25,
+  "standalone_http_requests": 54,
+  "all_passed": true,
+  "fixed_regressions": [
+    "zero buyers rejected",
+    "provider-class priority for utility ties",
+    "f64 JSON bit loss"
+  ],
+  "models_modified": false
+}

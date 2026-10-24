@@ -1,0 +1,2 @@
+    Checking aeza-market-simulator v0.1.0 (/Users/timofej/Desktop/aeza/aeza-intelligence/market-simulator)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.57s

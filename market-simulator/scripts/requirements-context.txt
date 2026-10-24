@@ -1,0 +1,2 @@
+# Optional GPU Parquet ingestion only; runtime Rust API needs no Python dependency.
+pyarrow==26.0.0

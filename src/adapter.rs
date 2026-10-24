@@ -15,6 +15,10 @@ use crate::model::{Account, ClientFeatures, Dataset, Service, Transaction};
 /// `migrations/`, embedded at compile time.
 pub static MIGRATOR: Migrator = sqlx::migrate!();
 
+const CLIENT_DATA_EXISTS: &str = "SELECT EXISTS (SELECT 1 FROM public.accounts)
+     OR EXISTS (SELECT 1 FROM public.services)
+     OR EXISTS (SELECT 1 FROM public.transactions)";
+
 /// Rows per `INSERT ... SELECT FROM UNNEST(...)` statement.
 const CHUNK_SIZE: usize = 10_000;
 
@@ -59,7 +63,7 @@ impl PgAdapter {
     /// the corresponding creation migrations as already satisfied. Their SQL
     /// files and checksums remain unchanged for databases that used SQLx.
     async fn baseline_existing_client_tables(&self) -> Result<(), Error> {
-        let existing: i64 = sqlx::query_scalar(
+        let existing: i32 = sqlx::query_scalar(
             "SELECT (to_regclass('public.accounts') IS NOT NULL)::int \
                   + (to_regclass('public.services') IS NOT NULL)::int \
                   + (to_regclass('public.transactions') IS NOT NULL)::int",
@@ -123,6 +127,13 @@ impl PgAdapter {
         )
     }
 
+    /// Whether accounts, services or transactions already have rows.
+    pub async fn has_client_data(&self) -> Result<bool, Error> {
+        Ok(sqlx::query_scalar(CLIENT_DATA_EXISTS)
+            .fetch_one(&self.pool)
+            .await?)
+    }
+
     /// Loads the dataset in a single transaction, with the same guarantees as `002_seed.sql`:
     /// the tables are locked, must be empty, and identity sequences are advanced past the
     /// loaded ids. On any error no data is written.
@@ -177,13 +188,9 @@ impl PgAdapter {
         .execute(&mut *tx)
         .await?;
 
-        let non_empty: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM public.accounts)
-                 OR EXISTS (SELECT 1 FROM public.services)
-                 OR EXISTS (SELECT 1 FROM public.transactions)",
-        )
-        .fetch_one(&mut *tx)
-        .await?;
+        let non_empty: bool = sqlx::query_scalar(CLIENT_DATA_EXISTS)
+            .fetch_one(&mut *tx)
+            .await?;
         if non_empty {
             return Err(Error::TablesNotEmpty);
         }
