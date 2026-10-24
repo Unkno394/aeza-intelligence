@@ -56,6 +56,51 @@ OIDC settings. For local development and the `scripts/check_*` scripts, which
 call the API directly, start it with `AUTH_DISABLED=true`: every request then
 acts as a superadmin, so never use it on a reachable host.
 
+#### Check the login locally
+
+`docker-compose.dev-auth.yml` adds a local Keycloak (`127.0.0.1:5556`,
+`KEYCLOAK_PORT`) with the realm `aeza` and the client `aeza-intelligence`
+from `dev/keycloak/aeza-realm.json`, and points `api` at it in place of the
+`OIDC_*` and `AUTH_DISABLED` values from `.env`. Sign-in is a real
+email + password form; Keycloak keeps its accounts in the `keycloak-data`
+volume.
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.dev-auth.yml up -d
+bash scripts/auth_user.sh add me@example.com operator "Имя Фамилия"   # asks for a password
+```
+
+Then open http://127.0.0.1:8080: it goes straight to the Keycloak form; sign in
+with that email and password. `scripts/auth_user.sh` creates the Keycloak account and the
+`public.admins` row together:
+
+```sh
+bash scripts/auth_user.sh role me@example.com viewer   # viewer | operator | superadmin
+bash scripts/auth_user.sh passwd me@example.com
+bash scripts/auth_user.sh disable me@example.com       # enable to restore
+bash scripts/auth_user.sh list
+```
+
+The Keycloak admin console is at http://127.0.0.1:5556/admin
+(`KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD`, `admin` / `admin` by default).
+An account created there also needs a `public.admins` row (`auth_user.sh role`
+does not create one; use `add`, or the SQL above).
+
+`bash scripts/check_auth.sh` starts Keycloak, the API and the frontend, creates
+test accounts `auth-*@aeza.test` and goes through the real Authorization Code +
+PKCE flow and the Keycloak login form via the frontend proxy. It checks 401
+without a session (HTTP, WebSocket, Market Simulator proxy), a wrong password,
+`returnTo`, cookie flags, the `forbidden`, `unverified`, `expired` and `denied`
+errors, the Origin check for the WebSocket and logout, that a viewer cannot
+change Risk Score settings and an operator can, that logout ends the session,
+and that deactivation ends it on the next request and closes an open WebSocket
+within 30 seconds. `--no-up` checks an already running stack, `--build`
+rebuilds the images first, `--cleanup` deactivates the test accounts.
+
+With dev auth on, `scripts/check_api.sh` and the other scripts that call
+`127.0.0.1:3000` get 401; `docker compose up -d api` restarts the API with the
+settings from `.env` again.
+
 ## Inputs
 
 - Pass a numeric feature map to `HistoricalModel::observe` for each customer

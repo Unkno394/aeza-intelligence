@@ -29,7 +29,9 @@ use sqlx::PgPool;
 use tokio::sync::Mutex;
 
 const SESSION_COOKIE: &str = "aeza_session";
-/// Binds a login in progress to the browser that started it.
+/// Binds a login in progress to the browser that started it. Each login has
+/// its own `aeza_login.<state>` cookie, so logins started in several tabs do
+/// not overwrite each other.
 const LOGIN_COOKIE: &str = "aeza_login";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_PENDING_LOGINS: usize = 10_000;
@@ -242,6 +244,20 @@ impl Auth {
     }
 }
 
+fn login_cookie(state: &str) -> String {
+    format!("{LOGIN_COOKIE}.{state}")
+}
+
+/// States issued by [`login`] are URL-safe base64; anything else cannot name a
+/// login cookie and must not reach a Set-Cookie header.
+fn valid_state(state: &str) -> bool {
+    !state.is_empty()
+        && state.len() <= 128
+        && state
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
 fn cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers
         .get_all(header::COOKIE)
@@ -358,8 +374,8 @@ pub async fn login(State(auth): State<Arc<Auth>>, Query(query): Query<LoginQuery
         AppendHeaders([(
             header::SET_COOKIE,
             auth.set_cookie(
-                LOGIN_COOKIE,
-                state.secret(),
+                &login_cookie(state.secret()),
+                "1",
                 "/api/auth",
                 LOGIN_TIMEOUT.as_secs() as i64,
             ),
@@ -404,24 +420,31 @@ pub async fn callback(
     headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
-    let clear_login = auth.set_cookie(LOGIN_COOKIE, "", "/api/auth", 0);
+    let mut cookies = Vec::new();
+    if let Some(state) = query.state.as_deref().filter(|state| valid_state(state)) {
+        cookies.push((
+            header::SET_COOKIE,
+            auth.set_cookie(&login_cookie(state), "", "/api/auth", 0),
+        ));
+    }
     match finish_login(&auth, &pool, &headers, query).await {
         Ok((token, return_to)) => {
             let max_age = i64::from(auth.oidc.as_ref().map_or(0, |oidc| oidc.session_hours)) * 3600;
-            (
-                AppendHeaders([
-                    (header::SET_COOKIE, clear_login),
-                    (
-                        header::SET_COOKIE,
-                        auth.set_cookie(SESSION_COOKIE, &token, "/", max_age),
-                    ),
-                ]),
-                Redirect::to(&return_to),
-            )
-                .into_response()
+            cookies.push((
+                header::SET_COOKIE,
+                auth.set_cookie(SESSION_COOKIE, &token, "/", max_age),
+            ));
+            (AppendHeaders(cookies), Redirect::to(&return_to)).into_response()
+        }
+        // A stale callback (e.g. from a tab whose login another tab already
+        // finished) is harmless when this browser is signed in by now.
+        Err(LoginError::Expired)
+            if matches!(auth.session(&pool, &headers).await, Ok(Some(_))) =>
+        {
+            (AppendHeaders(cookies), Redirect::to("/")).into_response()
         }
         Err(error) => (
-            AppendHeaders([(header::SET_COOKIE, clear_login)]),
+            AppendHeaders(cookies),
             Redirect::to(&format!("/?authError={}", error.code())),
         )
             .into_response(),
@@ -443,7 +466,7 @@ async fn finish_login(
         return Err(LoginError::Failed);
     };
     // The state must belong to this browser, not only to some pending login.
-    if cookie(headers, LOGIN_COOKIE) != Some(state.as_str()) {
+    if !valid_state(&state) || cookie(headers, &login_cookie(&state)).is_none() {
         return Err(LoginError::Expired);
     }
     let login = oidc
@@ -576,10 +599,18 @@ mod tests {
     fn reads_cookie_among_others() {
         let mut headers = HeaderMap::new();
         headers.append(header::COOKIE, "a=1; aeza_session=tok".parse().unwrap());
-        headers.append(header::COOKIE, "aeza_login=st".parse().unwrap());
+        headers.append(header::COOKIE, "aeza_login.st=1".parse().unwrap());
         assert_eq!(cookie(&headers, SESSION_COOKIE), Some("tok"));
-        assert_eq!(cookie(&headers, LOGIN_COOKIE), Some("st"));
+        assert_eq!(cookie(&headers, &login_cookie("st")), Some("1"));
         assert_eq!(cookie(&headers, "missing"), None);
+    }
+
+    #[test]
+    fn only_issued_states_name_a_login_cookie() {
+        assert!(valid_state(CsrfToken::new_random().secret()));
+        assert!(!valid_state(""));
+        assert!(!valid_state("a; Path=/"));
+        assert!(!valid_state("a\r\nSet-Cookie: x=1"));
     }
 
     #[test]

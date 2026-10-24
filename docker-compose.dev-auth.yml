@@ -1,0 +1,55 @@
+# Local Keycloak as the OIDC provider: real sign-in with a password, without
+# an external IdP.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev-auth.yml up -d
+#   bash scripts/auth_user.sh add me@example.com operator    # account + role
+#   bash scripts/check_auth.sh                               # end-to-end checks
+#
+# Keycloak keeps its users in the keycloak-data volume; the realm and the
+# client are imported from dev/keycloak on the first start. This overlay
+# replaces the OIDC_* settings and AUTH_DISABLED from .env for the api service.
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.7
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm", "--http-port=8080", "--health-enabled=true"]
+    # The issuer follows the request host, so the browser and market_api (host
+    # network) must both reach Keycloak at the same 127.0.0.1 address.
+    ports:
+      - "127.0.0.1:${KEYCLOAK_PORT:-5556}:8080"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_AEZA_PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:${FRONTEND_PORT:-8080}}
+      KC_AEZA_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-dev-secret}
+    volumes:
+      # /opt/keycloak/data belongs to the keycloak user in the image, so the
+      # new volume gets the same owner.
+      - keycloak-data:/opt/keycloak/data
+      - ./dev/keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      # The image has no curl; ask the management port with bash alone.
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"UP"' <&3
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
+
+  api:
+    environment:
+      OIDC_ISSUER: http://127.0.0.1:${KEYCLOAK_PORT:-5556}/realms/aeza
+      OIDC_CLIENT_ID: aeza-intelligence
+      OIDC_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-dev-secret}
+      AUTH_DISABLED: "false"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+
+volumes:
+  keycloak-data:
