@@ -2,7 +2,10 @@ use std::{collections::BTreeMap, time::Duration};
 
 use aeza_intelligence::{
     PgAdapter,
-    historical::{BehaviorEvent, HISTORICAL_MODEL_VERSION, HistoricalAssessment, HistoricalModel},
+    historical::{
+        BehaviorEvent, HISTORICAL_MODEL_VERSION, HistoricalAssessment, HistoricalConfig,
+        HistoricalModel,
+    },
     model::ClientFeatures,
 };
 use anyhow::{Context, Result, bail, ensure};
@@ -81,6 +84,21 @@ async fn collect_at(
     account_id: Option<i64>,
 ) -> Result<usize> {
     let day = now.date_naive();
+    let stored_settings =
+        sqlx::query("SELECT version, settings FROM public.client_settings WHERE id")
+            .fetch_optional(adapter.pool())
+            .await?;
+    let (settings_version, historical_min_days) = stored_settings.map_or((0, 30), |row| {
+        let version: i64 = row.get("version");
+        let settings: Value = row.get("settings");
+        let history_days = settings
+            .get("historicalMinDays")
+            .and_then(Value::as_i64)
+            .unwrap_or(30)
+            .clamp(7, 365);
+        (version, history_days)
+    });
+    let minimum_history_ms = historical_min_days.saturating_mul(86_400_000);
     let clients = adapter.client_features(now, "7 days").await?;
     let event_highwater: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(id), 0) FROM public.operation_logs WHERE \"occurredAt\" <= $1",
@@ -93,20 +111,27 @@ async fn collect_at(
         .into_iter()
         .filter(|client| account_id.is_none_or(|id| client.account_id == id))
     {
-        let same_day_state: Option<String> = sqlx::query_scalar(
-            "SELECT model_state::text FROM public.client_snapshots \
+        let same_day = sqlx::query(
+            "SELECT model_state::text AS state, settings_version FROM public.client_snapshots \
              WHERE account_id = $1 AND observed_on = $2",
         )
         .bind(client.account_id)
         .bind(day)
         .fetch_optional(adapter.pool())
         .await?;
-        let same_day_version = same_day_state
-            .as_deref()
-            .and_then(|state| serde_json::from_str::<Value>(state).ok())
+        let same_day_version = same_day
+            .as_ref()
+            .and_then(|row| row.try_get::<String, _>("state").ok())
+            .and_then(|state| serde_json::from_str::<Value>(&state).ok())
             .and_then(|state| state.get("model_version").and_then(Value::as_u64))
             .unwrap_or_default();
-        if same_day_version >= u64::from(HISTORICAL_MODEL_VERSION) {
+        let same_day_settings_version = same_day
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("settings_version").ok())
+            .unwrap_or_default();
+        if same_day_version >= u64::from(HISTORICAL_MODEL_VERSION)
+            && same_day_settings_version == settings_version
+        {
             continue;
         }
 
@@ -130,8 +155,15 @@ async fn collect_at(
                     has_cursor,
                 )
             }
-            None => (HistoricalModel::default(), None, false),
+            None => {
+                let config = HistoricalConfig {
+                    minimum_history_ms,
+                    ..HistoricalConfig::default()
+                };
+                (HistoricalModel::new(config), None, false)
+            }
         };
+        model.set_minimum_history_ms(minimum_history_ms);
         // Older saved states predate event-log ingestion. Start from now instead of
         // replaying initial seed/import rows as if they were a customer's behavior.
         if !has_event_checkpoint {
@@ -176,11 +208,12 @@ async fn collect_at(
         merge_event_assessments(&mut assessment, event_assessments);
         let inserted = sqlx::query(
             "INSERT INTO public.client_snapshots \
-             (account_id, observed_on, observed_at, features, assessment, model_state) \
-             VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb) \
+            (account_id, observed_on, observed_at, features, assessment, model_state, settings_version) \
+             VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7) \
              ON CONFLICT (account_id, observed_on) DO UPDATE SET \
                  observed_at = EXCLUDED.observed_at, features = EXCLUDED.features, \
-                 assessment = EXCLUDED.assessment, model_state = EXCLUDED.model_state",
+                 assessment = EXCLUDED.assessment, model_state = EXCLUDED.model_state, \
+                 settings_version = EXCLUDED.settings_version",
         )
         .bind(client.account_id)
         .bind(day)
@@ -188,6 +221,7 @@ async fn collect_at(
         .bind(serde_json::to_string(&features)?)
         .bind(serde_json::to_string(&assessment)?)
         .bind(model.to_json()?)
+        .bind(settings_version)
         .execute(adapter.pool())
         .await?;
         count += inserted.rows_affected() as usize;

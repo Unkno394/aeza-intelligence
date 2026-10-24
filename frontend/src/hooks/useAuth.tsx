@@ -10,7 +10,7 @@ export function AuthGate({children}:{children:ReactNode}) {
  // A failed recheck (e.g. API restart) keeps the current state; only a 401 signs out.
  async function recheck(){try{const me=await fetchMe();setAdmin(me);if(!me)setStatus('anonymous');}catch{}}
  useEffect(()=>{void load();},[]);
- if(status!=='ready')return <Login status={status} error={error} retry={()=>{setStatus('loading');void load();}}/>;
+ if(status!=='ready')return <Login status={status} error={error} retry={()=>{setStatus('loading');void load();}} onSuccess={()=>{setStatus('loading');void load();}}/>;
  return <Context.Provider value={{admin,recheck}}>{children}</Context.Provider>;
 }
 export const useAuth=()=>useContext(Context);

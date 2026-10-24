@@ -17,9 +17,11 @@ import {
   Wallet
 } from 'lucide-react';
 import { input2, number2 } from './format';
-import type { Plan, Scenario, Sensitivity } from './api';
-import { priceChangeMultiplier } from './scenario';
+import type { Plan, Report, Scenario, Sensitivity } from './api';
+import { initialAezaOfferSet, priceChangeMultiplier } from './scenario';
 import { GlassSelect } from '../../components/ui/GlassSelect';
+import {useCurrency} from '../../hooks/useCurrency';
+import {convertCurrency} from './currency';
 
 type WizardStep = 1 | 2 | 3 | 4;
 type MarketType = 'economy' | 'extended';
@@ -47,9 +49,14 @@ interface Props {
   busy: boolean;
   error: string;
   hasReport: boolean;
+  report: Report | null;
+  resultSensitivity: Sensitivity;
   stale: boolean;
   statusText: string;
+  onOpenStatistics: () => void;
 }
+
+type SimulationRun = Report['runs'][number];
 
 const steps = [
   { title: 'Настройка рынка', hint: 'Регион, период, спрос', icon: MapPin },
@@ -78,7 +85,17 @@ const sensitivityDescriptions: Record<Sensitivity, string> = {
   medium: 'Средняя реакция на изменение цены.',
   high: 'Покупатели сильнее выбирают более дешёвые предложения.'
 };
-const rub = (value: number) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 2 }).format(value);
+const signedCount = (value: number) => `${value > 0 ? '+' : ''}${number2(value)}`;
+const summarizeRun = (run: SimulationRun) => {
+  const final = run.months.at(-1)!.providers.aeza;
+  return {
+    active: final.active_leases,
+    revenue: run.aeza_total_revenue_usd,
+    profit: run.aeza_total_profit_usd,
+    renewals: run.months.reduce((sum, month) => sum + month.providers.aeza.renewals, 0),
+    exits: run.months.reduce((sum, month) => sum + month.providers.aeza.switches_out + month.providers.aeza.churn_to_outside, 0)
+  };
+};
 
 export function MarketSimulatorWizard({
   draft,
@@ -101,9 +118,18 @@ export function MarketSimulatorWizard({
   busy,
   error,
   hasReport,
+  report,
+  resultSensitivity,
   stale,
-  statusText
+  statusText,
+  onOpenStatistics
 }: Props) {
+  const {convertRub,currency,fx} = useCurrency();
+  const valuationFx = report?.scenario.valuation_fx ?? draft.valuation_fx ?? fx;
+  const toDisplayMoney = (value:number) => convertCurrency(value,'RUB',currency,valuationFx) ?? value;
+  const toStoredRub = (value:number) => convertCurrency(value,currency,'RUB',valuationFx) ?? value;
+  const rub = (value: number) => convertRub(value, valuationFx);
+  const signedRub = (value: number) => `${value > 0 ? '+' : ''}${rub(value)}`;
   const [step, setStep] = useState<WizardStep>(1);
   const [city, setCity] = useState(() => draft.aeza_plans.flatMap(plan => plan.regions)[0] ?? 'Moscow');
   const [direction, setDirection] = useState(1);
@@ -124,6 +150,7 @@ export function MarketSimulatorWizard({
     update({ market, segments: draft.segments.map(segment => ({ ...segment, region })) });
   };
   const toggleStrategy = (name: string, checked: boolean) => {
+    if (name === 'baseline' && !checked) return;
     onStrategiesChange(checked ? [...strategies, name] : strategies.filter(value => value !== name));
   };
   const updateSegment = (index: number, key: SegmentNumberKey, value: number) => {
@@ -140,8 +167,23 @@ export function MarketSimulatorWizard({
   };
 
   const priceOptions = official.filter(plan => plan.regions.includes(city));
+  const simulationPriceOptions = initialAezaOfferSet(official, city);
+  const selectedObservedCount = Math.min(3, simulationPriceOptions.length);
+  const selectedCpuClassLabel = simulationPriceOptions.some(plan => plan.details?.cpu_class === 'shared') ? 'Shared' : 'все доступные классы CPU';
   const customMultiplier = priceChangeMultiplier(Number.isFinite(Number(custom)) ? Number(custom) : 0);
   const estimate = `${draft.aeza_plans.length} тариф${draft.aeza_plans.length === 1 ? '' : draft.aeza_plans.length < 5 ? 'а' : 'ов'}`;
+  const resultRuns = report?.runs.filter(run => run.sensitivity === resultSensitivity) ?? [];
+  const baselineRun = resultRuns.find(run => run.strategy === 'baseline');
+  const baselineMetrics = baselineRun ? summarizeRun(baselineRun) : null;
+  const resultBySensitivity = report ? [...new Set(report.runs.map(run => run.sensitivity))].map(level => ({
+    level,
+    run: report.runs.find(run => run.strategy === 'baseline' && run.sensitivity === level)
+  })).filter((item): item is { level: Sensitivity; run: SimulationRun } => Boolean(item.run)) : [];
+  const presetDescription = preset === 'akash'
+    ? 'Подставляет только относительную помесячную форму притока из исторических наблюдений Akash. Число покупателей в месяц и бюджеты остаются сценарными; веса повторяются, если горизонт длиннее архива.'
+    : preset === 'budget'
+      ? 'Ставит приток равным по месяцам и снижает бюджеты шаблонных сегментов на 30%. Это модельное изменение, а не измерение бюджетов клиентов.'
+      : 'Задаёт одинаковый относительный вес притока для каждого месяца. Объём покупателей и бюджеты остаются заданными в сценарии.';
   const activeInfo = [
     'Задайте границы рынка и исходный спрос. Сценарий Akash использует историческую форму притока, а масштаб покупателей остаётся вашим допущением.',
     'Укажите цены Aéza и выберите варианты для сравнения. Результаты покажут разницу между стратегиями при одинаковых условиях спроса.',
@@ -192,7 +234,7 @@ export function MarketSimulatorWizard({
                   { value: 'flat', label: 'Ровный приток' },
                   { value: 'budget', label: 'Бюджеты ниже на 30%' }
                 ]} />
-                <small>Готовая форма притока и бюджета покупателей.</small>
+                <small>{presetDescription}</small>
               </label>
               <label>Рынок
                 <GlassSelect aria-label="Регион рынка" value={draft.market ?? 'all'} onChange={changeMarket} options={[
@@ -215,7 +257,7 @@ export function MarketSimulatorWizard({
               </label>
               <label>Приток покупателей в месяц
                 <input aria-label="Базовый приток покупателей" type="number" required min={0} max={1000} value={draft.buyers_per_month} onChange={event => update({ buyers_per_month: Number(event.target.value) })} />
-                <small>Количество новых покупателей в начале периода.</small>
+                <small>Заданное вручную число новых модельных покупателей в месяц. Akash меняет помесячные веса, но не этот объём.</small>
               </label>
               <label>Seed для воспроизводимости
                 <input aria-label="Seed для воспроизводимости" type="number" required min={0} max={Number.MAX_SAFE_INTEGER} step={1} value={draft.seed} onChange={event => update({ seed: Number(event.target.value) })} />
@@ -237,12 +279,13 @@ export function MarketSimulatorWizard({
             <div className="market-wizard-section-title market-wizard-section-spaced"><div><h3>Начальные условия</h3><p>Откуда взять стартовые цены тарифов Aéza.</p></div></div>
             <div className="market-wizard-cards market-wizard-source" role="radiogroup" aria-label="Источник стартовых цен">
               <button type="button" role="radio" aria-checked={priceSource === 'observed'} className="market-wizard-choice" data-selected={priceSource === 'observed' || undefined} onClick={() => { if (onApplyObserved(city)) onPriceSourceChange('observed'); }}>
-                <span className="market-wizard-choice-icon"><Database size={18} /></span><span><strong>Текущие рыночные данные</strong><small>{priceOptions.length ? `${priceOptions.length} официальных тарифов Aéza доступны для ${city}.` : 'Тарифы из последнего проверенного снимка.'}</small></span><span className="market-wizard-radio" />
+                <span className="market-wizard-choice-icon"><Database size={18} /></span><span><strong>Текущие рыночные данные</strong><small>{priceOptions.length ? `В снимке для ${city} доступно ${priceOptions.length} тарифов. В сценарий загружаются до ${selectedObservedCount} (${selectedCpuClassLabel}, по возрастанию vCPU). Это весь городской каталог и выбранная ценовая выборка.` : 'Тарифы из последнего проверенного снимка.'}</small></span><span className="market-wizard-radio" />
               </button>
               <button type="button" role="radio" aria-checked={priceSource === 'manual'} className="market-wizard-choice" data-selected={priceSource === 'manual' || undefined} onClick={() => { onPriceSourceChange('manual'); onDraftChange({ ...draft, aeza_plans: draft.aeza_plans.map(plan => ({ ...plan, origin: 'scenario_assumption', details: null, source: 'scenario://user-input' })) }); }}>
                 <span className="market-wizard-choice-icon"><Sparkles size={18} /></span><span><strong>Задать цены вручную</strong><small>Использовать тарифы как условие сценария и отредактировать их на следующем шаге.</small></span><span className="market-wizard-radio" />
               </button>
             </div>
+            <div className="market-wizard-provenance"><Database size={16} /><p><strong>Что здесь основано на данных:</strong> каталог и цены Aéza берутся из проверенного снимка с датой наблюдения. <strong>Что задано для сценария:</strong> объём покупателей, бюджеты и потребности сегментов, цены конкурентов при изменении, а также правила поведения. Исторический Akash влияет только на относительное распределение притока по месяцам; данные о клиентах Aéza из него не выводятся.</p></div>
             {!cities.length && <p className="market-wizard-note"><CircleHelp size={15} />В снимке не найден список городов Aéza. Начальные цены можно задать вручную или проверить в разделе «Данные».</p>}
           </>}
 
@@ -250,25 +293,25 @@ export function MarketSimulatorWizard({
             <header className="market-wizard-heading">
               <span className="market-wizard-kicker">ШАГ 2 ИЗ 4</span>
               <h2>Цены и стратегии</h2>
-              <p>Сравните базовые цены с изменениями. При редактировании тарифа наблюдаемая цена сохраняется как исходная, а расчёт использует введённое значение.</p>
+              <p>В шаге 1 показывался весь каталог города ({priceOptions.length} тарифов). Здесь — выбранная для расчёта выборка ({estimate}). {priceSource === 'observed' ? 'Это до трёх тарифов из того же снимка и городского фильтра: сначала Shared, по возрастанию vCPU.' : 'В ручном режиме состав и цены ниже — допущения сценария; при смене города они автоматически не заменяются.'} Редактирование наблюдаемой цены сохраняет её исходное значение.</p>
             </header>
-            <div className="market-wizard-section-title"><div><h3>Базовые цены Aéza</h3><p>{estimate} · ежемесячная стоимость, RUB</p></div><span className="market-wizard-source-tag" data-source={priceSource}>{priceSource === 'observed' ? 'Проверенный снимок' : 'Сценарные цены'}</span></div>
+            <div className="market-wizard-section-title"><div><h3>Базовые цены Aéza</h3><p>{estimate} · ежемесячная стоимость, {currency}</p></div><span className="market-wizard-source-tag" data-source={priceSource}>{priceSource === 'observed' ? 'Проверенный снимок' : 'Сценарные цены'}</span></div>
             <div className="market-wizard-prices">
               {draft.aeza_plans.map((plan, index) => <label className="market-wizard-price" key={plan.id}>
                 <span><strong>{plan.name}</strong><small>{number2(plan.vcpu)} vCPU · {number2(plan.ram_gb)} GB RAM · {number2(plan.disk_gb)} GB диск</small></span>
-                <span className="market-wizard-price-input"><input aria-label={`Цена Aéza ${plan.name}`} type="number" required min={0.01} max={1_000_000_000} step={0.01} value={input2(plan.monthly_usd)} onChange={event => {
+                <span className="market-wizard-price-input"><input aria-label={`Цена Aéza ${plan.name}`} type="number" required min={0.01} max={1_000_000_000} step={0.01} value={input2(toDisplayMoney(plan.monthly_usd))} onChange={event => {
                   const plans = [...draft.aeza_plans];
-                  plans[index] = { ...plan, monthly_usd: input2(Number(event.target.value)), origin: plan.details ? 'scenario_override_of_observed' : 'scenario_assumption' };
+                  plans[index] = { ...plan, monthly_usd: input2(toStoredRub(Number(event.target.value))), origin: plan.details ? 'scenario_override_of_observed' : 'scenario_assumption' };
                   onDraftChange({ ...draft, aeza_plans: plans });
                   onPriceSourceChange('manual');
-                }} /><span>₽ / мес.</span></span>
+                }} /><span>{currency} / мес.</span></span>
               </label>)}
             </div>
             <div className="market-wizard-divider" />
-            <div className="market-wizard-section-title"><div><h3>Стратегии для сравнения</h3><p>Выберите хотя бы один вариант, чтобы рассчитать сценарий.</p></div></div>
+            <div className="market-wizard-section-title"><div><h3>Стратегии для сравнения</h3><p>Базовый сценарий всегда служит точкой отсчёта; выберите одну или несколько альтернатив.</p></div></div>
             <div className="market-wizard-strategies">
-              {[...template.strategies.map(strategy => strategy.name), 'custom'].map(name => <label className="market-wizard-strategy" key={name} data-selected={strategies.includes(name) || undefined}>
-                <input type="checkbox" checked={strategies.includes(name)} onChange={event => toggleStrategy(name, event.target.checked)} />
+              {[...new Set(['baseline', ...template.strategies.map(strategy => strategy.name), 'custom'])].map(name => <label className="market-wizard-strategy" key={name} data-selected={strategies.includes(name) || undefined}>
+                <input type="checkbox" checked={strategies.includes(name)} disabled={name === 'baseline'} onChange={event => toggleStrategy(name, event.target.checked)} />
                 <span className="market-wizard-check"><Check size={13} /></span>
                 <span><strong>{strategyLabels[name] ?? name}</strong><small>{strategyDescriptions[name] ?? 'Изменение ценовой стратегии для тарифов Aéza.'}</small></span>
               </label>)}
@@ -292,22 +335,23 @@ export function MarketSimulatorWizard({
               <h2>Допущения модели</h2>
               <p>Уточните бюджеты и потребности сегментов. Расширенные параметры можно оставить свёрнутыми и использовать значения сценария.</p>
             </header>
-            <div className="market-wizard-section-title"><div><h3>Бюджеты покупателей</h3><p>Границы месячного бюджета сегмента, RUB.</p></div><Users size={18} /></div>
+            <div className="market-wizard-section-title"><div><h3>Бюджеты покупателей</h3><p>Границы месячного бюджета сегмента, {currency}.</p></div><Users size={18} /></div>
+            <div className="market-wizard-provenance"><Users size={16} /><p><strong>Модельные значения, не данные клиентских счетов.</strong> Исходные бюджеты, веса и требования к ресурсам взяты из шаблона сценария; их можно менять ниже. Базовый приток покупателей также задан вручную. Для Akash берётся только форма распределения этого притока по месяцам.</p></div>
             <div className="market-wizard-segments">
               {draft.segments.map((segment, index) => <div className="market-wizard-segment" key={segment.name}>
                 <div><strong>{segment.name}</strong><small>Доля {number2(segment.weight * 100)}% · минимум ресурса {number2(segment.vcpu)} vCPU / {number2(segment.ram_gb)} GB RAM</small></div>
-                <label>От<input type="number" min={0} step={0.01} aria-label={`${segment.name}: минимальный бюджет`} value={input2(segment.budget_min)} onChange={event => updateSegment(index, 'budget_min', input2(Number(event.target.value)))} /></label>
-                <label>До<input type="number" min={0} step={0.01} aria-label={`${segment.name}: максимальный бюджет`} value={input2(segment.budget_max)} onChange={event => updateSegment(index, 'budget_max', input2(Number(event.target.value)))} /></label>
+                <label>От<input type="number" min={0} step={0.01} aria-label={`${segment.name}: минимальный бюджет`} value={input2(toDisplayMoney(segment.budget_min))} onChange={event => updateSegment(index, 'budget_min', input2(toStoredRub(Number(event.target.value))))} /></label>
+                <label>До<input type="number" min={0} step={0.01} aria-label={`${segment.name}: максимальный бюджет`} value={input2(toDisplayMoney(segment.budget_max))} onChange={event => updateSegment(index, 'budget_max', input2(toStoredRub(Number(event.target.value))))} /></label>
               </div>)}
             </div>
 
             <details className="market-assumptions market-wizard-advanced" open={marketType === 'extended'}>
               <summary>Уход, затраты и стоимость перехода<span>{marketType === 'extended' ? 'Учитываются в расчёте' : 'Не учитываются в базовом режиме'}</span></summary>
               <div className="market-wizard-grid market-wizard-grid-advanced">
-                <label>Вероятность ухода в месяц, %<input type="number" min={0} max={100} step={0.01} disabled={marketType === 'economy'} value={Number((draft.monthly_departure_probability * 100).toFixed(2))} onChange={event => update({ monthly_departure_probability: Number(event.target.value) / 100 })} /><small>Базовая вероятность ухода из Aéza за один месяц.</small></label>
-                <label>Переменные затраты на аренду, ₽<input type="number" min={0} max={1_000_000} step={0.01} disabled={marketType === 'economy'} value={input2(draft.aeza_variable_cost_usd)} onChange={event => update({ aeza_variable_cost_usd: input2(Number(event.target.value)) })} /><small>Затраты на одну активную аренду в месяц.</small></label>
-                <label>Постоянные затраты в месяц, ₽<input type="number" min={0} max={1_000_000_000} step={0.01} disabled={marketType === 'economy'} value={input2(draft.aeza_fixed_cost_usd)} onChange={event => update({ aeza_fixed_cost_usd: input2(Number(event.target.value)) })} /><small>Учитываются при расчёте сценарной прибыли.</small></label>
-                <label>Стоимость перехода, utility<input type="number" min={0} max={20} step={0.01} disabled={marketType === 'economy'} value={input2(draft.switching_cost_utility)} onChange={event => update({ switching_cost_utility: input2(Number(event.target.value)) })} /><small>Снижает склонность действующего клиента сменить провайдера.</small></label>
+                <label>Экзогенный уход за месяц, % активных аренд<input type="number" min={0} max={100} step={0.01} disabled={marketType === 'economy'} value={Number((draft.monthly_departure_probability * 100).toFixed(2))} onChange={event => update({ monthly_departure_probability: Number(event.target.value) / 100 })} /><small>Модельная вероятность ухода без установленной причины за каждый месяц. Значение шаблона не оценено по фактическому churn Aéza.</small></label>
+                <label>Переменные затраты на аренду, {currency}<input type="number" min={0} max={1_000_000_000} step={0.01} disabled={marketType === 'economy'} value={input2(toDisplayMoney(draft.aeza_variable_cost_usd))} onChange={event => update({ aeza_variable_cost_usd: input2(toStoredRub(Number(event.target.value))) })} /><small>Затраты на одну активную аренду в месяц.</small></label>
+                <label>Постоянные затраты в месяц, {currency}<input type="number" min={0} max={1_000_000_000} step={0.01} disabled={marketType === 'economy'} value={input2(toDisplayMoney(draft.aeza_fixed_cost_usd))} onChange={event => update({ aeza_fixed_cost_usd: input2(toStoredRub(Number(event.target.value))) })} /><small>Учитываются при расчёте сценарной прибыли.</small></label>
+                <label>Барьер смены провайдера, баллы полезности<input type="number" min={0} max={20} step={0.01} disabled={marketType === 'economy'} value={input2(draft.switching_cost_utility)} onChange={event => update({ switching_cost_utility: input2(Number(event.target.value)) })} /><small>Баллы в формуле выбора, не рубли и не фактическая стоимость миграции. Значение шаблона — модельное допущение без калибровки по наблюдениям клиентов.</small></label>
               </div>
               {marketType === 'economy' && <p className="market-wizard-inline-note">В режиме «Экономика и удержание» затраты и стоимость перехода временно равны нулю. Исходные значения сохраняются и снова применятся в расширенном режиме.</p>}
             </details>
@@ -341,22 +385,36 @@ export function MarketSimulatorWizard({
             <header className="market-wizard-heading">
               <span className="market-wizard-kicker">ШАГ 4 ИЗ 4</span>
               <h2>Расчёт и результаты</h2>
-              <p>Проверьте параметры. После расчёта появятся графики спроса, выручки, прибыли, продлений и ухода клиентов.</p>
+              <p>Проверьте допущения и запустите расчёт. Ниже появится сравнение альтернатив с базовым сценарием; подробные графики останутся под мастером.</p>
             </header>
             <div className="market-wizard-review">
               <div><span className="market-wizard-review-icon"><MapPin size={17} /></span><span><small>Рынок и горизонт</small><strong>{draft.market === 'russia' ? 'Россия' : draft.market === 'international' ? 'Международный рынок' : 'Общий рынок'} · {city} · {draft.months} мес.</strong></span></div>
-              <div><span className="market-wizard-review-icon"><Users size={17} /></span><span><small>Новые покупатели</small><strong>{draft.buyers_per_month} в месяц · seed {draft.seed}</strong></span></div>
-              <div><span className="market-wizard-review-icon"><Wallet size={17} /></span><span><small>Цены и стратегии · {priceSource === 'observed' ? 'проверенный снимок' : 'ручные цены'}</small><strong>{estimate} · {strategies.map(name => strategyLabels[name] ?? name).join(', ') || 'стратегии не выбраны'}</strong></span></div>
+              <div><span className="market-wizard-review-icon"><Users size={17} /></span><span><small>Новые модельные покупатели</small><strong>{draft.buyers_per_month} в месяц · seed {draft.seed}</strong><small>Объём и бюджеты заданы сценарием; Akash задаёт только форму притока.</small></span></div>
+              <div><span className="market-wizard-review-icon"><Wallet size={17} /></span><span><small>Цены · {priceSource === 'observed' ? 'проверенный снимок' : 'сценарные цены'}</small><strong>{estimate} · {strategies.map(name => strategyLabels[name] ?? name).join(', ') || 'стратегии не выбраны'}</strong></span></div>
+              <div><span className="market-wizard-review-icon"><Gauge size={17} /></span><span><small>Бюджеты сегментов</small><strong>{draft.segments.length} модельных сегмента · заданы в сценарии</strong></span></div>
               <div><span className="market-wizard-review-icon"><Gauge size={17} /></span><span><small>Чувствительность</small><strong>{draft.sensitivities.map(value => sensitivityLabels[value]).join(', ') || 'не выбрана'}</strong></span></div>
+              <div><span className="market-wizard-review-icon"><Activity size={17} /></span><span><small>Уход и смена провайдера</small><strong>{Number((draft.monthly_departure_probability * 100).toFixed(2))}% / мес. · {input2(draft.switching_cost_utility)} балла полезности</strong><small>Оба значения — допущения шаблона, не фактические оценки Aéza.</small></span></div>
             </div>
             <div className="market-wizard-disclaimer"><CircleHelp size={18} /><p><strong>Сценарная оценка, а не прогноз.</strong> Результат зависит от заданных цен, бюджетов, источников и допущений. Реальное поведение покупателей и фактическую прибыльность модель не гарантирует.</p></div>
-            {hasReport && <div className="market-wizard-result-status" role="status">{stale ? 'Параметры изменились — после запуска будет создан новый расчёт.' : statusText}</div>}
+            {report && <div className="market-wizard-result-status" role="status">{stale ? 'Параметры изменились — ниже предыдущий расчёт. Запустите новый, чтобы обновить таблицу.' : statusText}</div>}
             {error && <div className="error-box market-error" role="alert">{error}{hasReport && ' Предыдущий успешный результат останется ниже.'}</div>}
-            <div className="market-wizard-output-preview">
-              <div><Server size={16} /><span><strong>Активные аренды и доля рынка</strong><small>По месяцам и выбранным стратегиям</small></span></div>
-              <div><Wallet size={16} /><span><strong>Выручка, затраты и прибыль</strong><small>Сценарные финансовые показатели</small></span></div>
-              <div><Users size={16} /><span><strong>Продления, переходы и отток</strong><small>Включая события к конкурентам и без аренды</small></span></div>
-            </div>
+            {!report && <div className="market-wizard-result-empty"><Activity size={19} /><span><strong>Расчёт ещё не запускался</strong><small>После нажатия «Рассчитать» здесь появятся показатели по стратегиям относительно базового сценария.</small></span></div>}
+            {report && resultRuns.length > 0 && <>
+              <h3 className="market-wizard-results-title">Сравнение стратегий · {sensitivityLabels[resultSensitivity]}</h3>
+              {baselineRun && baselineMetrics
+                ? <div className="table-scroll"><table><thead><tr><th>Стратегия</th><th>Активные аренды в конце</th><th>Δ к базе</th><th>Выручка</th><th>Δ к базе</th><th>Прибыль</th><th>Δ к базе</th><th>Продления</th><th>Уходы</th></tr></thead><tbody>{resultRuns.map(run => {
+                  const metrics = summarizeRun(run);
+                  const base = run.strategy === 'baseline';
+                  return <tr key={run.strategy}><td>{strategyLabels[run.strategy] ?? run.strategy}</td><td>{metrics.active}</td><td>{base ? '—' : signedCount(metrics.active - baselineMetrics.active)}</td><td>{rub(metrics.revenue)}</td><td>{base ? '—' : signedRub(metrics.revenue - baselineMetrics.revenue)}</td><td>{rub(metrics.profit)}</td><td>{base ? '—' : signedRub(metrics.profit - baselineMetrics.profit)}</td><td>{metrics.renewals}</td><td>{metrics.exits}</td></tr>;
+                })}</tbody></table></div>
+                : <p className="market-hint">В расчёте нет базовой стратегии для сравнения. Выберите базовую цену на шаге 2 и пересчитайте сценарий.</p>}
+              {resultBySensitivity.length > 1 && <>
+                <h3 className="market-wizard-results-title">Чувствительность результата к реакции покупателей</h3>
+                <p className="market-hint">Один и тот же seed, разные значения ценовой чувствительности. Это сравнение уровней внутри сценария, не разброс по seed.</p>
+                <div className="table-scroll"><table><thead><tr><th>Чувствительность</th><th>Активные аренды</th><th>Выручка</th><th>Прибыль</th><th>Продления</th><th>Уходы</th></tr></thead><tbody>{resultBySensitivity.map(({ level, run }) => {const metrics = summarizeRun(run);return <tr key={level}><td>{sensitivityLabels[level]}</td><td>{metrics.active}</td><td>{rub(metrics.revenue)}</td><td>{rub(metrics.profit)}</td><td>{metrics.renewals}</td><td>{metrics.exits}</td></tr>;})}</tbody></table></div>
+              </>}
+            </>}
+            <div className="market-wizard-stability"><div><strong>Разброс по seed</strong><span>Текущий расчёт использует один seed. Для оценки разброса запустите 100 seed отдельно для каждой чувствительности; результаты сохраняются во вкладке «Статистика».</span></div><button type="button" className="market-wizard-link" onClick={onOpenStatistics}>Проверить устойчивость <ArrowRight size={15} /></button></div>
           </>}
         </div>
 

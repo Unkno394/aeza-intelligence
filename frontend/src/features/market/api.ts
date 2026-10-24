@@ -69,7 +69,7 @@ export class MarketApi {
   }
   behavior(scenario:Scenario,strategy:string,sensitivity:Sensitivity) {return this.request<BehaviorAnalysis>('/behavior',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(marketCurrencyWire({scenario,strategy,sensitivity},true))});}
   statistics(scenario:Scenario,sensitivity:Sensitivity){return this.request<SeedStatistics>('/statistics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(marketCurrencyWire({scenario,sensitivity},true))});}
-  sources() { return this.request<MarketSources>('/sources'); }
+  sources() { return this.request<MarketSources>('/sources', { cache: 'no-store' }); }
   contexts() {return this.request<MarketContexts>('/contexts');}
   aezaPlans() { return this.request<Plan[]>('/aeza-plans'); }
   catalog() { return this.request<Plan[]>('/catalog'); }

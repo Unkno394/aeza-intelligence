@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde_json::json;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgPool, PgPoolOptions};
-use sqlx::{Postgres, Transaction as PgTx};
+use sqlx::{Postgres, Row, Transaction as PgTx};
 
 use crate::Error;
 use crate::model::{Account, ClientFeatures, Dataset, Service, Transaction};
@@ -54,7 +54,25 @@ impl PgAdapter {
     /// Applies pending migrations; already applied ones are skipped.
     pub async fn migrate(&self) -> Result<(), Error> {
         self.baseline_existing_client_tables().await?;
-        MIGRATOR.run(&self.pool).await?;
+        let migration_result = MIGRATOR.run(&self.pool).await;
+        if migration_result.is_err() {
+            if let Ok(applied) = sqlx::query(
+                "SELECT version, description FROM _sqlx_migrations \
+                 WHERE version BETWEEN 111 AND 114 ORDER BY version",
+            )
+            .fetch_all(&self.pool)
+            .await
+            {
+                for row in applied {
+                    eprintln!(
+                        "applied migration {}: {}",
+                        row.get::<i64, _>("version"),
+                        row.get::<String, _>("description")
+                    );
+                }
+            }
+        }
+        migration_result?;
         Ok(())
     }
 

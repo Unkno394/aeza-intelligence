@@ -26,9 +26,20 @@ the application containers; the existing database remains in place.
 ### Authentication
 
 The web UI and every `/api` route, including the `/api/client/ws` WebSocket and
-the Market Simulator behind the frontend proxy, require a session. Sign-in uses
-OpenID Connect (Authorization Code + PKCE) with any provider that publishes
+the Market Simulator behind the frontend proxy, require a session. For local
+sign-in, set `LOCAL_ADMIN_USER` and a unique `LOCAL_ADMIN_PASSWORD` of at least
+16 characters in `.env`. The local account has the `superadmin` role. Its
+sessions are stored in API memory and expire after `SESSION_HOURS`; a restart
+signs everyone out. The login page also supports OpenID Connect (Authorization
+Code + PKCE) with any provider that publishes
 `/.well-known/openid-configuration`:
+
+The Compose stack includes a local Keycloak provider at
+`http://127.0.0.1:8081`. Its Aéza realm, public PKCE client, and
+`analyst@aeza.local` account are imported on first start. Set
+`KEYCLOAK_ADMIN_PASSWORD` and `SSO_USER_PASSWORD` in `.env`; the SSO button
+then signs in as `analyst` using `SSO_USER_PASSWORD`. The Keycloak admin console
+uses username `admin` and `KEYCLOAK_ADMIN_PASSWORD`.
 
 1. Register a client at the provider with redirect URI
    `<PUBLIC_URL>/api/auth/callback` and post-logout redirect URI `<PUBLIC_URL>/`.
@@ -51,8 +62,8 @@ OpenID Connect (Authorization Code + PKCE) with any provider that publishes
 
 Sessions last `SESSION_HOURS` (12 by default) in an HttpOnly, SameSite=Lax
 cookie (`Secure` when `PUBLIC_URL` is https); `public.admin_sessions` stores
-only SHA-256 hashes of the tokens. `market_api` refuses to start without the
-OIDC settings. For local development and the `scripts/check_*` scripts, which
+only SHA-256 hashes of OIDC tokens. `market_api` refuses to start without either
+the local credentials or OIDC settings. For local development and the `scripts/check_*` scripts, which
 call the API directly, start it with `AUTH_DISABLED=true`: every request then
 acts as a superadmin, so never use it on a reachable host.
 
@@ -151,8 +162,9 @@ Ok(())
 ## Interpretation
 
 `familiarity` uses snapshot count, history duration, and completeness. The
-default model requires ten complete snapshots spanning 30 days before it makes
-confident metric claims. `event_familiarity` uses repeated transitions and their
+default model requires ten complete snapshots spanning the configured minimum
+history period (30 days by default) before it makes confident metric claims.
+The Settings page allows a 7–365 day history period. `event_familiarity` uses repeated transitions and their
 history span. Low familiarity prevents the model from making a confident claim.
 `is_unusual` means a customer's
 current behavior differs from their own history; it is not a churn probability.
@@ -183,6 +195,47 @@ daily snapshots. The first run establishes the event-log starting point; old
 seed operations are not replayed as customer behavior.
 
 ## Market Intelligence
+
+### Continuous synthetic customer stream
+
+The optional `demo-stream` service exercises the live pipeline without touching
+real customer rows. It owns three accounts named `demo-stream-*@example.test`
+with negative IDs and their nine services. Every 15 seconds it changes one
+account. The three profiles emphasize manual renewal and imminent expiry,
+insufficient funds near renewal, and `prolong_wait` with a `not_performed`
+renewal attempt. Each recovers after the risky phase, so both rising and falling
+scores can be observed. The ordinary database triggers append those writes to
+`operation_logs`; the API then recalculates Risk Score and pushes the changed
+dataset and scores over WebSocket. A `not_performed` transaction is an unpaid
+attempt in the fixture, not proof of customer churn.
+
+On first start the service also replays 60 synthetic daily profiles through the
+real Historical Model into `client_snapshots`, ending yesterday. This creates a
+personal baseline and recent deviations in seconds; it does not pretend the
+current database rows were historically observed. The current day remains free
+for the normal snapshot collector. The Historical chart shows a separate
+**synthetic Risk Score** series for virtual days, calculated with the saved
+Snapshot coefficients and the same weighted-severity rule as the live API.
+This lets reviewers compare historical scenario risk with behavioral anomaly
+without treating either as a measured churn probability. Existing replay data
+is kept on restart when the window and settings version still match; otherwise
+only the demo clients' past snapshots are rebuilt.
+
+```sh
+# Start only the optional generator and its prerequisites; the normal stack may already run.
+docker compose --profile demo up -d --build demo-stream
+# Stop synthetic writes without removing the fixture or its history.
+docker compose stop demo-stream
+# One change without Docker, or replay 90 virtual days and exit:
+cargo run --bin demo_stream -- --once
+cargo run --bin demo_stream -- --replay-days 90 --replay-only
+```
+
+`DEMO_STREAM_INTERVAL_SECONDS` (2–3600), `DEMO_REPLAY_DAYS` (31–365) and
+`DEMO_REPLAY_DELAY_MS` (0–10000) control the Compose demo. The replay's virtual
+days are historical model test inputs; live Risk Score still uses the current
+accounts, services and transactions. The generator intentionally has no access
+to positive customer IDs.
 
 ### Check both client models with generated data
 
@@ -235,7 +288,9 @@ and the three `/api/market/*` routes.
 For a one-time snapshot run, use `cargo run --bin client_snapshot` after
 loading `.env`. Run `bash scripts/check_api.sh` to print response counts.
 Client data is read-only in the frontend; Risk Score settings are stored in
-`public.client_settings` and shared by every session. Every route except
+`public.client_settings`, versioned in `public.client_settings_history`, and
+shared by every session. Historical snapshots record the configuration version
+used to calculate them. Every route except
 `/api/auth/login`, `/callback` and `/logout` requires a session (see
 [Authentication](#authentication)).
 
@@ -244,20 +299,20 @@ Client data is read-only in the frontend; Risk Score settings are stored in
 `GET /api/client/ws` upgrades to a WebSocket carrying JSON messages with a
 `type` field. The server sends:
 
-- `snapshot` — `{dataset, settings, risks}` on connect and after a session
+- `snapshot` — `{dataset, settings, settingsMetadata, risks}` on connect and after a session
   falls behind;
 - `dataset` — accounts, services or transactions changed (detected by polling
   `operation_logs` every 2 seconds);
 - `scores` — `{changed, removed}`: only the accounts whose Risk Score changed,
   after a data or settings change and at least once a minute, since scores
   depend on the current time;
-- `settings` — Risk Score settings changed in any session;
+- `settings` — Risk Score settings and their version metadata changed in any session;
 - `ack` / `error` — the reply to a client request (`error.requestId` is `null`
   for an unreadable message).
 
 The client sends `{"type": "updateSettings", "requestId": "1", "settings": {...}}`.
-The settings are validated, saved and broadcast to every session together with
-the resulting `scores`. The frontend reconnects with exponential backoff and
+The settings are validated, saved with the editor and timestamp, and broadcast
+to every session together with the resulting `scores`. The frontend reconnects with exponential backoff and
 receives a fresh `snapshot` after each reconnect.
 
 Existing market rows remain in place. The migration runner records applied

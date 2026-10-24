@@ -1,0 +1,36 @@
+{
+  "realm": "aeza",
+  "enabled": true,
+  "displayName": "Aéza Intelligence",
+  "loginWithEmailAllowed": true,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "clients": [
+    {
+      "clientId": "aeza-intelligence",
+      "name": "Aéza Intelligence",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://127.0.0.1:8080/api/auth/callback"],
+      "webOrigins": ["http://127.0.0.1:8080"],
+      "attributes": {"pkce.code.challenge.method": "S256"}
+    }
+  ],
+  "users": [
+    {
+      "username": "analyst",
+      "email": "analyst@aeza.local",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Aéza",
+      "lastName": "Analyst",
+      "credentials": [
+        {"type": "password", "value": "${SSO_USER_PASSWORD}", "temporary": false}
+      ]
+    }
+  ]
+}

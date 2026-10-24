@@ -11,19 +11,20 @@ import {Statistics} from '../features/market/Statistics';
 import {Behavior} from '../features/market/Behavior';
 import {Competition} from '../features/market/Competition';
 import {MarketData} from '../features/market/MarketData';
-import {sameScenario, buildMarketScenario, priceChangeMultiplier} from '../features/market/scenario';
+import {sameScenario, buildMarketScenario, priceChangeMultiplier, initialAezaPlans} from '../features/market/scenario';
 import {MarketSimulatorWizard} from '../features/market/MarketSimulatorWizard';
+import {useCurrency} from '../hooks/useCurrency';
 
 const api = new MarketApi();
 const sensitivityLabels: Record<Sensitivity, string> = {low: 'Низкая', medium: 'Средняя', high: 'Высокая'};
 const strategyLabels: Record<string, string> = {baseline:'Базовая цена', discount_20:'Скидка 20%', increase_20:'Повышение 20%', intro_then_increase:'Скидка → повышение', custom:'Своя стратегия'};
 const palette = ['#89d6ff', '#b9a0ff', '#f9bc7c', '#7cdebd', '#f4a5c2'];
-const usd = (n: number) => new Intl.NumberFormat('ru-RU', {style:'currency', currency:'RUB', maximumFractionDigits:2}).format(n);
 const integer = (n: number) => new Intl.NumberFormat('ru-RU').format(n);
 const title = (n: string) => strategyLabels[n] ?? n;
 const clone = <T,>(x: T): T => structuredClone(x);
 
 export default function MarketSimulator() {
+  const {convertRub,currency} = useCurrency();
   const [template, setTemplate] = useState<Scenario|null>(null);
   const [draft, setDraft] = useState<Scenario|null>(null);
   const [catalog, setCatalog] = useState<Plan[]>([]);
@@ -36,8 +37,9 @@ export default function MarketSimulator() {
   const [marketType, setMarketType] = useState<'economy'|'extended'>('extended');
   const [priceSource, setPriceSource] = useState<'observed'|'manual'>('observed');
   const [sensitivity, setSensitivity] = useState<Sensitivity>('medium'), [focus, setFocus] = useState('baseline');
-  const [search, setSearch] = useState('');
   const [pageView,setPageView]=useState('simulation');
+  const [observedMarketPlanIds,setObservedMarketPlanIds]=useState<string[]>([]);
+  const usd = (amount: number) => convertRub(amount, report?.scenario.valuation_fx ?? draft?.valuation_fx ?? source?.fx);
   const controller = useRef<AbortController|null>(null);
   const generation = useRef(0);
   async function load() {
@@ -46,7 +48,7 @@ export default function MarketSimulator() {
       const [s, c, provenance, own] = await Promise.all([api.example(), api.catalog(), api.sources(),api.aezaPlans()]);
       if (id !== generation.current) return;
       setTemplate(s); setDraft(clone(s)); setCatalog(c); setSource(provenance); setOfficial(own);
-      setStrategies(s.strategies.map(x => x.name)); setPreset('akash'); setReport(null);
+      setStrategies([...new Set(['baseline', ...s.strategies.map(x => x.name)])]); setPreset('akash'); setReport(null);
       setMarketType('extended');
       setPriceSource(s.aeza_plans.some(plan => plan.origin === 'observed_list_price' || plan.details) ? 'observed' : 'manual');
     } catch (e) { if (id === generation.current) setError(e instanceof Error ? e.message : 'Не удалось загрузить API'); }
@@ -75,6 +77,7 @@ export default function MarketSimulator() {
   const stale = report !== null && !sameScenario(scenario, report.scenario);
   const sensitivities = report ? [...new Set(report.runs.map(r => r.sensitivity))] : [];
   const visibleSensitivity = sensitivities.includes(sensitivity) ? sensitivity : sensitivities[0];
+  const resultSensitivity = visibleSensitivity ?? sensitivity;
   const runs = report?.runs.filter(r => r.sensitivity === visibleSensitivity) ?? [];
   const selectedRun = runs.find(r => r.strategy === focus) ?? runs[0];
   const latest = selectedRun?.months.at(-1);
@@ -98,23 +101,20 @@ export default function MarketSimulator() {
   }
   function applyObservedPrices(city: string) {
     if (!draft) return false;
-    const inCity = official.filter(plan => plan.regions.includes(city)).sort((a, b) => a.vcpu - b.vcpu);
-    const preferredClass = inCity.find(plan => plan.details?.cpu_class === 'shared')?.details?.cpu_class;
-    const matching = preferredClass ? inCity.filter(plan => plan.details?.cpu_class === preferredClass) : inCity;
+    const matching = initialAezaPlans(official, city);
     if (!matching.length) {
       setError(`В проверенном снимке нет тарифов Aéza для города ${city}. Выберите ручные цены или другой город.`);
       return false;
     }
-    setDraft({...draft, aeza_plans: clone(matching.slice(0, 3))});
+    setDraft({...draft, aeza_plans: clone(matching)});
     setPriceSource('observed');
     setError('');
     return true;
   }
-  const filtered = catalog.filter(p => `${p.provider} ${p.name}`.toLowerCase().includes(search.toLowerCase()));
   return <div className="simulator-page">
     <div className="page-heading"><div><div className="eyebrow">РЫНОК VPS / VDS</div><h1>Market Simulator<span className="title-dot"/></h1><p>Проверяйте цены и сравнивайте стратегии на одном виртуальном рынке.</p></div><span className="count-tag">HTTP API · {catalog.length} тарифов</span></div>
-    <div className="market-context"><span><i/>Rust API</span><span>{draft.market==='russia'?'Россия':draft.market==='international'?'Международный рынок':'Общий рынок'}</span><span>Расчёты в ₽</span><span>Seed {draft.seed}</span><button type="button" onClick={()=>setPageView('data')}>Сценарная модель · об источниках ↗</button></div>
-    <nav className="market-navigation" aria-label="Разделы Market Simulator">{[{id:'simulation',label:'Симуляция',icon:TrendingUp},{id:'behavior',label:'Покупатели',icon:Users},{id:'competition',label:'Конкуренты',icon:Server},{id:'statistics',label:'Статистика',icon:TrendingUp},{id:'data',label:'Данные',icon:Wallet}].map(({id,label,icon:Icon})=><button key={id} type="button" aria-pressed={pageView===id} onClick={()=>setPageView(id)}><Icon size={16}/>{label}</button>)}</nav>
+    <div className="market-context"><span><i/>Rust API</span><span>{draft.market==='russia'?'Россия':draft.market==='international'?'Международный рынок':'Общий рынок'}</span><span>Расчёт в RUB · показ {currency}</span><span>Seed {draft.seed}</span><button type="button" onClick={()=>setPageView('data')}>Сценарная модель · об источниках ↗</button></div>
+    <nav className="market-navigation" aria-label="Разделы Market Simulator">{[{id:'simulation',label:'Симуляция',icon:TrendingUp},{id:'behavior',label:'Сегменты спроса',icon:Users},{id:'competition',label:'Конкуренты',icon:Server},{id:'statistics',label:'Статистика',icon:TrendingUp},{id:'data',label:'Данные',icon:Wallet}].map(({id,label,icon:Icon})=><button key={id} type="button" aria-pressed={pageView===id} onClick={()=>setPageView(id)}><Icon size={16}/>{label}</button>)}</nav>
     <div hidden={pageView!=='simulation'}>
     <MarketSimulatorWizard
       draft={draft}
@@ -137,8 +137,11 @@ export default function MarketSimulator() {
       busy={busy}
       error={error}
       hasReport={Boolean(report)}
+      report={report}
+      resultSensitivity={resultSensitivity}
       stale={stale}
       statusText={report ? stale ? 'Настройки изменены — нужен новый расчёт.' : 'Результат соответствует текущим настройкам.' : 'После запуска отчёт появится ниже.'}
+      onOpenStatistics={() => setPageView('statistics')}
     />
 
     {report && selectedRun && latest && aeza ? <section aria-label="Результаты Market API" aria-busy={busy}>
@@ -147,18 +150,17 @@ export default function MarketSimulator() {
       <div className="market-view-controls"><label>Показать чувствительность<GlassSelect aria-label="Чувствительность результатов" value={visibleSensitivity} onChange={value => setSensitivity(value as Sensitivity)} options={sensitivities.map(s => ({value:s,label:sensitivityLabels[s]}))}/></label><label>Детали стратегии<GlassSelect aria-label="Стратегия результатов" value={selectedRun.strategy} onChange={setFocus} options={runs.map(r => ({value:r.strategy,label:title(r.strategy)}))}/></label></div>
       <div className="metrics">{[{label:'Активные аренды Aéza',value:integer(aeza.active_leases),foot:`Последний месяц · доля ${(aeza.market_share*100).toFixed(1)}%`,icon:Server},{label:'Выручка за период',value:usd(selectedRun.aeza_total_revenue_usd),foot:title(selectedRun.strategy),icon:Wallet},{label:'Сценарная прибыль',value:usd(selectedRun.aeza_total_profit_usd),foot:'Выручка − сценарные постоянные и переменные затраты',icon:TrendingUp},{label:'Уход из Aéza за период',value:integer(selectedRun.months.reduce((n,m) => n+m.providers.aeza.churn_to_outside+m.providers.aeza.switches_out,0)),foot:'События: к конкурентам + без аренды',icon:Users}].map(m => <div className="metric" key={m.label}><div className="metric-top">{m.label}<m.icon size={17}/></div><strong>{m.value}</strong><div className="metric-foot">{m.foot}</div></div>)}</div>
       <div className="market-charts"><Panel title="Спрос при разных стратегиях" subtitle={`Активные аренды Aéza · чувствительность: ${sensitivityLabels[visibleSensitivity]}`}><div className="simulator-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={chartData} margin={{top:10,right:24,left:0,bottom:0}}><CartesianGrid strokeDasharray="3 4" stroke="#8aa5bb30"/><XAxis dataKey="month" tick={{fill:'var(--muted)'}}/><YAxis allowDecimals={false} tick={{fill:'var(--muted)'}}/><Tooltip/><Legend/>{runs.map((r,i) => <Line key={r.strategy} dataKey={`s${i}`} name={title(r.strategy)} stroke={palette[i]} strokeWidth={2} isAnimationActive={false}/>)}</LineChart></ResponsiveContainer></div></Panel>
-      <Panel title="Выручка, затраты и прибыль" subtitle={`${title(selectedRun.strategy)} · RUB за каждый месяц`}><div className="simulator-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={financial} margin={{top:10,right:24,left:0,bottom:0}}><CartesianGrid strokeDasharray="3 4" stroke="#8aa5bb30"/><XAxis dataKey="month" tick={{fill:'var(--muted)'}}/><YAxis tickFormatter={number2} tick={{fill:'var(--muted)'}}/><Tooltip formatter={v => usd(Number(v))}/><Legend/><Line dataKey="revenue" name="Выручка" stroke={palette[0]} strokeWidth={2} isAnimationActive={false}/><Line dataKey="cost" name="Затраты" stroke={palette[2]} strokeWidth={2} isAnimationActive={false}/><Line dataKey="profit" name="Прибыль" stroke={palette[3]} strokeWidth={2} isAnimationActive={false}/></LineChart></ResponsiveContainer></div></Panel></div>
+      <Panel title="Выручка, затраты и прибыль" subtitle={`${title(selectedRun.strategy)} · ${currency} за каждый месяц`}><div className="simulator-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={financial} margin={{top:10,right:24,left:0,bottom:0}}><CartesianGrid strokeDasharray="3 4" stroke="#8aa5bb30"/><XAxis dataKey="month" tick={{fill:'var(--muted)'}}/><YAxis tickFormatter={number2} tick={{fill:'var(--muted)'}}/><Tooltip formatter={v => usd(Number(v))}/><Legend/><Line dataKey="revenue" name="Выручка" stroke={palette[0]} strokeWidth={2} isAnimationActive={false}/><Line dataKey="cost" name="Затраты" stroke={palette[2]} strokeWidth={2} isAnimationActive={false}/><Line dataKey="profit" name="Прибыль" stroke={palette[3]} strokeWidth={2} isAnimationActive={false}/></LineChart></ResponsiveContainer></div></Panel></div>
       <Panel title="Набор аренд и уход" subtitle={`${title(selectedRun.strategy)} · исходящие события показаны отдельным столбцом`}><div className="simulator-chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={movements} margin={{top:10,right:24,left:0,bottom:0}}><CartesianGrid strokeDasharray="3 4" stroke="#8aa5bb30"/><XAxis dataKey="month" tick={{fill:'var(--muted)'}}/><YAxis allowDecimals={false} tick={{fill:'var(--muted)'}}/><Tooltip/><Legend/><Bar dataKey="renewals" name="Продления" stackId="active" fill={palette[0]} isAnimationActive={false}/><Bar dataKey="new" name="Новые / вернувшиеся" stackId="active" fill={palette[3]} isAnimationActive={false}/><Bar dataKey="switches" name="Пришли от конкурентов" stackId="active" fill={palette[1]} isAnimationActive={false}/><Bar dataKey="lost" name="Ушли из Aéza" fill={palette[2]} isAnimationActive={false}/></BarChart></ResponsiveContainer></div></Panel>
       <Panel title="Сравнение стратегий" subtitle="Итоги всего периода; аренды и доля — в последнем месяце"><div className="table-scroll"><table><thead><tr><th>Стратегия</th><th>Чувствительность</th><th>Аренды</th><th>Доля рынка</th><th>Выручка</th><th>Прибыль</th></tr></thead><tbody>{report.runs.map(r => {const m=r.months.at(-1)!.providers.aeza; return <tr key={`${r.strategy}-${r.sensitivity}`}><td><button type="button" className="text-link" onClick={() => {setFocus(r.strategy);setSensitivity(r.sensitivity);}}>{title(r.strategy)}</button></td><td>{sensitivityLabels[r.sensitivity]}</td><td>{m.active_leases}</td><td>{(m.market_share*100).toFixed(1)}%</td><td>{usd(r.aeza_total_revenue_usd)}</td><td>{usd(r.aeza_total_profit_usd)}</td></tr>;})}</tbody></table></div></Panel>
-      <Panel title="Продления, переходы и отток Aéza" subtitle="Доля ухода = (к конкурентам + без аренды) / активные аренды предыдущего месяца"><div className="table-scroll"><table><thead><tr><th>Мес.</th><th>Цена ×</th><th>Цены тарифов, ₽</th><th>Активные</th><th>CPU / RAM / storage</th><th>Продления</th><th>К конкурентам</th><th>Без аренды</th><th>Доля ухода</th><th>Выручка</th><th>Прибыль</th></tr></thead><tbody>{selectedRun.months.map((m,i) => {const a=m.providers.aeza;const previous=selectedRun.months[i-1]?.providers.aeza.active_leases??0;const multiplier=report.scenario.strategies.find(s=>s.name===selectedRun.strategy)!.aeza_price_multipliers[i];return <tr key={m.month}><td>{m.month}</td><td>{multiplier.toFixed(2)}</td><td>{report.scenario.aeza_plans.map(p => m.aeza_effective_prices_usd?.[p.id] === undefined ? '—' : usd(m.aeza_effective_prices_usd[p.id])).join(' / ')}</td><td>{a.active_leases}</td><td>{number2(m.aeza_capacity_usage.vcpu)} / {number2(m.aeza_capacity_usage.ram_gb)} / {number2(m.aeza_capacity_usage.storage_gb)} GB</td><td>{a.renewals}</td><td>{a.switches_out}</td><td>{a.churn_to_outside}</td><td>{previous?`${((a.switches_out+a.churn_to_outside)/previous*100).toFixed(1)}%`:'—'}</td><td>{usd(a.revenue_usd)}</td><td>{usd(a.profit_usd??0)}</td></tr>;})}</tbody></table></div><div className="market-hint">replay SHA256: <code>{report.replay_sha256}</code></div></Panel>
+      <Panel title="Продления, переходы и отток Aéza" subtitle="Доля ухода = (к конкурентам + без аренды) / активные аренды предыдущего месяца"><div className="table-scroll"><table><thead><tr><th>Мес.</th><th>Цена ×</th><th>Цены тарифов, {currency}</th><th>Активные</th><th>CPU / RAM / storage</th><th>Продления</th><th>К конкурентам</th><th>Без аренды</th><th>Доля ухода</th><th>Выручка</th><th>Прибыль</th></tr></thead><tbody>{selectedRun.months.map((m,i) => {const a=m.providers.aeza;const previous=selectedRun.months[i-1]?.providers.aeza.active_leases??0;const multiplier=report.scenario.strategies.find(s=>s.name===selectedRun.strategy)!.aeza_price_multipliers[i];return <tr key={m.month}><td>{m.month}</td><td>{multiplier.toFixed(2)}</td><td>{report.scenario.aeza_plans.map(p => m.aeza_effective_prices_usd?.[p.id] === undefined ? '—' : usd(m.aeza_effective_prices_usd[p.id])).join(' / ')}</td><td>{a.active_leases}</td><td>{number2(m.aeza_capacity_usage.vcpu)} / {number2(m.aeza_capacity_usage.ram_gb)} / {number2(m.aeza_capacity_usage.storage_gb)} GB</td><td>{a.renewals}</td><td>{a.switches_out}</td><td>{a.churn_to_outside}</td><td>{previous?`${((a.switches_out+a.churn_to_outside)/previous*100).toFixed(1)}%`:'—'}</td><td>{usd(a.revenue_usd)}</td><td>{usd(a.profit_usd??0)}</td></tr>;})}</tbody></table></div><div className="market-hint">replay SHA256: <code>{report.replay_sha256}</code></div></Panel>
     </section> : <div className="market-empty"><Server size={25}/><h2>Рынок готов к расчёту</h2><p>Задайте цены выше и нажмите «Рассчитать через API».</p></div>}
     </div>
     <div hidden={pageView!=='statistics'}><Statistics scenario={scenario}/></div>
-    <div hidden={pageView!=='behavior'}><Behavior scenario={scenario}/></div>
-    <div hidden={pageView!=='competition'}><Competition draft={draft} catalog={catalog}/></div>
+    <div hidden={pageView!=='behavior'}><Behavior scenario={scenario} priceSource={priceSource}/></div>
+    <div hidden={pageView!=='competition'}><Competition draft={draft} catalog={catalog} source={source} observedPricePlanIds={observedMarketPlanIds} onOpenData={()=>setPageView('data')}/></div>
     <div hidden={pageView!=='data'}>
-    <MarketData draft={draft} setDraft={setDraft} official={official} source={source} catalog={catalog} onRefresh={async()=>{const [c,s,o]=await Promise.all([api.catalog(),api.sources(),api.aezaPlans()]);setCatalog(c);setSource(s);setOfficial(o);}}/>
-    <Panel title="Рыночные данные и границы модели" subtitle={`${source?.prepared_as_of} · ${source?.license}`}><p className="market-hint">Цены — снимок каталога, доступность и налоги требуют проверки. Ёмкость Aéza ограничена указанными CPU/RAM/storage; один покупатель — одна аренда. Ушедшие могут вернуться в следующий период. Прибыль учитывает только заданные затраты. ML-модели не вызываются.</p><details className="market-assumptions"><summary>Каталог конкурентов и ограничения источников</summary><label className="market-search">Найти провайдера или тариф<input aria-label="Поиск тарифов" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Например, Vultr"/></label><p className="market-hint">Показаны первые {Math.min(10,filtered.length)} из {filtered.length} найденных тарифов.</p><div className="table-scroll"><table><thead><tr><th>Провайдер</th><th>Тариф</th><th>CPU</th><th>RAM, GB</th><th>Диск, GB</th><th>Цена / мес.</th><th>Дата</th></tr></thead><tbody>{filtered.slice(0,10).map(p=><tr key={p.id}><td>{p.provider}</td><td>{p.name}</td><td>{number2(p.vcpu)}</td><td>{number2(p.ram_gb)}</td><td>{number2(p.disk_gb)}</td><td>{usd(p.monthly_usd)}</td><td>{p.observed_at}</td></tr>)}</tbody></table></div><ul className="market-limits">{source?.limitations.map(l=><li key={l}>{l}</li>)}</ul></details></Panel>
+    <MarketData draft={draft} setDraft={setDraft} official={official} source={source} catalog={catalog} onObservedMatchesChange={setObservedMarketPlanIds} onPriceSourceChange={setPriceSource} onOpenSimulation={()=>setPageView('simulation')} onRefresh={async()=>{const [c,s,o]=await Promise.all([api.catalog(),api.sources(),api.aezaPlans()]);setCatalog(c);setSource(s);setOfficial(o);}}/>
     </div>
   </div>;
 }

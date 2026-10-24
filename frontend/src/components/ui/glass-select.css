@@ -7,12 +7,19 @@
 .glass-select-chevron{flex:0 0 auto;color:#a9cce4;transition:transform .16s ease}
 .glass-select-trigger[aria-expanded=true] .glass-select-chevron{transform:rotate(180deg)}
 .glass-select-menu{position:fixed;z-index:1000;max-height:min(280px,calc(100vh - 16px));overflow:auto;padding:5px;border:1px solid #b9e3ff58;border-radius:11px;background:linear-gradient(145deg,#1b3c59f5,#10273df7 58%,#0c1d30f8);-webkit-backdrop-filter:blur(20px) saturate(165%);backdrop-filter:blur(20px) saturate(165%);box-shadow:inset 0 1px #ffffff27,0 16px 42px #020b15a8;color:#dceeff;outline:none;overscroll-behavior:contain}
+.glass-select-search{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:9px;padding:8px 10px;margin-bottom:4px;border:1px solid #b9e3ff30;border-radius:7px;background:#10283df5;color:#8eb6d4}
+.glass-select-search input{width:100%;min-width:0;padding:0;border:0;outline:none;background:transparent;color:#e5f4ff;font-size:11px;box-shadow:none}
+.glass-select-search input::placeholder{color:#89a9c0}
+.glass-select-options{max-height:min(260px,calc(100vh - 78px));overflow:auto;overscroll-behavior:contain}
+.glass-select-empty{padding:14px 10px;color:#9eb7ca;font-size:11px;text-align:center}
 .glass-select-option{display:flex;align-items:center;justify-content:space-between;gap:14px;min-height:36px;padding:8px 10px;border:1px solid transparent;border-radius:7px;color:#c6dceb;font-size:11px;line-height:1.4;cursor:pointer;transition:background .13s ease,border-color .13s ease,color .13s ease}
 .glass-select-option>span{min-width:0;overflow-wrap:anywhere}
 .glass-select-option>svg{flex:0 0 auto;color:#a5d8ff}
 .glass-select-option.is-active,.glass-select-option:hover{background:linear-gradient(110deg,#8fd6ff2c,#69a9d719);border-color:#b9e3ff24;color:#f0f9ff}
 .glass-select-option.is-selected{color:#e8f6ff}
 .glass-select-option.is-disabled{opacity:.42;cursor:not-allowed}
+.glass-select-menu.simulator-select-menu .glass-select-option,.glass-select-menu.simulator-select-menu .glass-select-empty{font-size:13px}
+.glass-select-menu.simulator-select-menu .glass-select-search input{font-size:13px}
 .filter-label .glass-select{flex:1;min-width:0}
 .filter-label .glass-select-trigger{min-height:32px;padding:6px 8px;border:0;border-radius:6px;background:transparent;box-shadow:none;color:#d9efff;font-size:9px}
 .filter-label .glass-select-trigger:hover,.filter-label .glass-select-trigger[aria-expanded=true]{background:#8dcfff18;border-color:transparent;box-shadow:none}
@@ -22,5 +29,5 @@
 .pagination .glass-select-trigger{min-height:25px;padding:4px 6px;border-radius:6px;font-size:8px}
 .market-fields .glass-select,.market-view-controls .glass-select,.tariff-controls .glass-select{width:100%}
 .simulator-page .glass-select-trigger,.tariff-controls .glass-select-trigger{min-height:42px;border-radius:10px}
-@media(max-width:680px){.client-select .glass-select{max-width:none}.glass-select-menu{max-height:min(260px,calc(100vh - 16px))}}
+@media(max-width:680px){.glass-select-menu{max-height:min(260px,calc(100vh - 16px))}}
 @media(prefers-reduced-motion:reduce){.glass-select-trigger,.glass-select-chevron,.glass-select-option{transition:none}}

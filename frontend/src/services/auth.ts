@@ -4,4 +4,5 @@ export const canEditSettings=(admin:Admin|null)=>admin?.role==='operator'||admin
 /** The signed-in admin, or null when there is no live session. */
 export async function fetchMe():Promise<Admin|null>{const r=await fetch('/api/auth/me');if(r.status===401)return null;if(!r.ok)throw new Error(r.status===502?'market_api не отвечает (502). Проверьте docker compose logs api.':`API: ${r.status}`);return r.json();}
 export function login(){const returnTo=location.pathname+location.search;location.assign(`/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`);}
+export async function localLogin(username:string,password:string){const response=await fetch('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username,password})});if(response.status===401)throw new Error('Неверный логин или пароль');if(!response.ok)throw new Error(`Не удалось войти: API ${response.status}`);}
 export async function logout(){const r=await fetch('/api/auth/logout',{method:'POST'});const body=r.ok?await r.json() as {logoutUrl:string|null}:{logoutUrl:null};location.assign(body.logoutUrl??'/');}

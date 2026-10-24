@@ -405,6 +405,11 @@ impl HistoricalModel {
         }
     }
 
+    /// Change the confidence horizon without discarding the client's learned history.
+    pub fn set_minimum_history_ms(&mut self, minimum_history_ms: i64) {
+        self.config.minimum_history_ms = minimum_history_ms.max(1);
+    }
+
     /// Serialize only the compact profile, graph and recent event window.
     /// The full observation history is not needed to resume online updates.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
@@ -1100,5 +1105,34 @@ pub fn lcs_similarity<T: Eq>(a: &[T], b: &[T]) -> f64 {
         0.0
     } else {
         lcs_length(a, b) as f64 / longest as f64
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::{HistoricalConfig, HistoricalModel};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn minimum_history_setting_changes_confidence_without_resetting_history() {
+        let mut config = HistoricalConfig {
+            minimum_observations: 2,
+            minimum_history_ms: 30 * 86_400_000,
+            expected_features: Default::default(),
+            ..HistoricalConfig::default()
+        };
+        config.minimum_familiarity = 1.0;
+        let mut model = HistoricalModel::new(config);
+        let features = BTreeMap::from([("monthly_spend".to_owned(), 100.0)]);
+        model.observe(0, &features, None);
+        model.observe(7 * 86_400_000, &features, None);
+
+        let before = model.familiarity();
+        model.set_minimum_history_ms(7 * 86_400_000);
+        let after = model.familiarity();
+
+        assert!(before < 0.3);
+        assert!(after > 0.99);
+        assert_eq!(model.observation_count, 2);
     }
 }

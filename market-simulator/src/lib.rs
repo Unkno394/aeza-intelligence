@@ -792,7 +792,11 @@ fn simulate_rub(s: Scenario, mut market: Vec<Plan>) -> Result<Report, String> {
                     let free = [limits[0]-used[0],limits[1]-used[1],limits[2]-used[2]];
                     let reason = behavior::classify(&s,b,&market,&prices,sensitivity,free,next,forced_departure);
                     let row = behavior_rows.entry(b.segment).or_insert_with(|| behavior::SegmentMonth {segment_index:b.segment,segment:s.segments[b.segment].name.clone(),..Default::default()});
-                    row.record(b, &market, next, forced_departure, reason);
+                    let segment_aeza_revenue = next
+                        .filter(|i| market[*i].provider == "aeza")
+                        .map(|i| money::float(price_ticks[i].expect("chosen offer has a billable price")))
+                        .unwrap_or(0.);
+                    row.record(b, &market, next, forced_departure, reason, segment_aeza_revenue);
                     behavior_ids.entry(reason.into()).or_default().insert(b.id);
                     let from = old.map_or("outside", |i| market[i].provider.as_str());
                     let to = next.map_or("outside", |i| market[i].provider.as_str());

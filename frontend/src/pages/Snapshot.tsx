@@ -4,6 +4,7 @@ import {ArrowDown,ArrowUp,ArrowUpDown,ArrowUpRight,CalendarClock,CheckCircle2,Ch
 import {useAnalyzer} from '../hooks/useAnalyzer';
 import {money,date} from '../lib/utils';
 import {Badge,Empty,Panel,colors} from '../components/common';
+import {AccountPicker} from '../components/ui/AccountPicker';
 import {GlassSelect} from '../components/ui/GlassSelect';
 import type {RiskResult,Service} from '../types';
 import './snapshot.css';
@@ -188,7 +189,7 @@ export default function Snapshot(){
  return <div className="snapshot-page">
   <div className="page-heading snapshot-heading">
    <div><div className="eyebrow">ОБЪЯСНИМАЯ АНАЛИТИКА</div><h1>Snapshot Model</h1><p>Текущий профиль клиента · состояние на дату расчёта</p></div>
-   <label className="client-select">Клиент<GlassSelect value={account.id} onChange={value=>{setParams({client:value});setServicePage(0);}} options={data.accounts.map(item=>({value:item.id,label:`${item.name} · ${item.id}`}))}/></label>
+   <AccountPicker accounts={data.accounts} value={account.id} onChange={value=>{setParams(current=>{const next=new URLSearchParams(current);next.set('client',value);return next;});setServicePage(0);}}/>
   </div>
 
   <div className="snapshot-top-grid">

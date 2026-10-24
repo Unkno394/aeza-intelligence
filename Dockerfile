@@ -13,6 +13,7 @@ RUN apt-get update \
 COPY --from=build /app/target/release/aeza_intelligence /usr/local/bin/aeza_intelligence
 COPY --from=build /app/target/release/market_api /usr/local/bin/market_api
 COPY --from=build /app/target/release/client_snapshot /usr/local/bin/client_snapshot
+COPY --from=build /app/target/release/demo_stream /usr/local/bin/demo_stream
 COPY --from=build /app/target/release/search_interest /usr/local/bin/search_interest
 COPY --from=build /app/target/release/market_import /usr/local/bin/market_import
 COPY --from=build /app/target/release/market_fx /usr/local/bin/market_fx

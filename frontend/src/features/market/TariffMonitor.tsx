@@ -2,24 +2,27 @@ import { useEffect, useMemo, useState } from 'react';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ArrowDownRight, ArrowUpRight, Check, ChevronLeft, ChevronRight, RefreshCw, Search, Server, TriangleAlert, X } from 'lucide-react';
 import { GlassSelect } from '../../components/ui/GlassSelect';
+import { useCurrency } from '../../hooks/useCurrency';
 import './tariff-monitor.css';
 
 type Tariff = {
   providerCode: string; provider: string; planKey: string; planName: string;
   cpuCores: number | null; ramGib: number | null; diskGib: number | null;
   diskType: string | null; region: string | null; observedOn: string;
-  priceRub: number | null; previousPriceRub: number | null; changePercent: number | null;
-  historyPoints: number; marketMedianRub: number | null; providersAtMedian: number;
+  priceRub: number | null; previousPriceRub: number | null; priceUsd: number | null; previousPriceUsd: number | null;
+  priceEur: number | null; previousPriceEur: number | null; rubRateOn: string | null;
+  usdRubRate: number | null; usdRateOn: string | null; eurRubRate: number | null; eurRateOn: string | null;
+  changePercent: number | null; changePercentUsd: number | null; changePercentEur: number | null;
+  historyPoints: number; marketMedianRub: number | null; marketMedianUsd: number | null; marketMedianEur: number | null; providersAtMedian: number;
   currency: string | null; originalPrice: number | null; billingPeriod: string | null;
   vatIncluded: boolean | null; trafficGib: number | null; trafficUnlimited: boolean | null;
   priceKind: string; pageDetails: string | null; sourceUrl: string; parseStatus: string;
 };
-type PricePoint = { providerCode: string; planKey: string; cpuCores: number | null; ramGib: number | null; diskGib: number | null; diskType: string | null; region: string | null; observedOn: string; priceRub: number };
+type PricePoint = { providerCode: string; planKey: string; cpuCores: number | null; ramGib: number | null; diskGib: number | null; diskType: string | null; region: string | null; observedOn: string; priceRub: number; priceUsd: number | null; priceEur: number | null; usdRubRate: number | null; usdRateOn: string | null; eurRubRate: number | null; eurRateOn: string | null };
 type ClientCohort = { planKey: string; linkedServices: number; accounts: number; awaitingRenewal: number; inactiveServices: number; performedRenewals: number; pendingRenewalTransactions: number };
 type BehaviorRow = { planKey: string; changedAt: string; previousMinor: number; currentMinor: number; currency: string; cohort: 'tariff' | 'peer'; period: 'before' | 'after'; services: number; accounts: number; performedRenewals: number; renewalRevenueMinor: number; prolongWaitEntries: number; prolongWaitServices: number; accountTopupsCents: number; completeFollowup: boolean; completeEventCoverage: boolean | null };
-type BenchmarkPoint = { monthStart: string; planKey: string; planName: string; cpuCores: number; ramGib: number; diskGib: number; diskType: string; region: string; priceRub: number; marketMedianRub: number; providerMedianMinRub: number; providerMedianMaxRub: number; providersAtMedian: number; gapPercent: number };
+type BenchmarkPoint = { monthStart: string; planKey: string; planName: string; cpuCores: number; ramGib: number; diskGib: number; diskType: string; region: string; priceRub: number; priceUsd: number | null; priceEur: number | null; marketMedianRub: number; marketMedianUsd: number | null; marketMedianEur: number | null; providerMedianMinRub: number; providerMedianMaxRub: number; providerMedianMinUsd: number | null; providerMedianMaxUsd: number | null; providerMedianMinEur: number | null; providerMedianMaxEur: number | null; providersAtMedian: number; gapPercent: number; gapPercentUsd: number | null; gapPercentEur: number | null };
 
-const rub = (value: number | null) => value === null ? '—' : new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 2 }).format(value);
 const number = (value: number | null) => value === null ? '—' : new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value);
 const currencyMinor = (minor: number, currency: string) => {
   try { return new Intl.NumberFormat('ru-RU', { style: 'currency', currency, maximumFractionDigits: 2 }).format(minor / 100); }
@@ -43,6 +46,16 @@ const exactPeers = (target: Tariff, rows: Tariff[]) => {
 const behaviorReady = (row: BehaviorRow) => row.completeFollowup && row.completeEventCoverage === true && row.services > 0;
 
 export default function TariffMonitor() {
+  const { currency } = useCurrency();
+  const money = (rubValue: number | null, usdValue?: number | null, eurValue?: number | null) => {
+    const value = currency === 'RUB' ? rubValue : currency === 'USD' ? usdValue : eurValue;
+    if (currency !== 'RUB' && value === null) return 'Нет курса на дату';
+    if (value === null || value === undefined) return '—';
+    return new Intl.NumberFormat('ru-RU', { style: 'currency', currency, maximumFractionDigits: 2 }).format(value);
+  };
+  const formatDisplayed = (value:number|null|undefined) => value===null||value===undefined?'—':new Intl.NumberFormat('ru-RU',{style:'currency',currency,maximumFractionDigits:2}).format(value);
+  const displayedPrice = (row: {priceRub:number|null;priceUsd?:number|null;priceEur?:number|null}) => currency==='RUB'?row.priceRub:currency==='USD'?row.priceUsd??null:row.priceEur??null;
+  const changeForCurrency = (row: Tariff) => currency==='RUB'?row.changePercent:currency==='USD'?row.changePercentUsd:row.changePercentEur;
   const [rows, setRows] = useState<Tariff[]>([]);
   const [history, setHistory] = useState<PricePoint[]>([]);
   const [cohorts, setCohorts] = useState<ClientCohort[]>([]);
@@ -100,18 +113,25 @@ export default function TariffMonitor() {
   const selected = rows.find(row => keyOf(row) === selectedKey) ?? null;
   const providerCount = providers.length;
   const comparableCount = rows.filter(row => row.providerCode === 'aeza' && hasExactBenchmark(row)).length;
-  const changedCount = rows.filter(row => row.changePercent !== null && Math.abs(row.changePercent) > 0.01).length;
+  const changedCount = rows.filter(row => changeForCurrency(row) !== null && Math.abs(changeForCurrency(row)!) > 0.01).length;
   const medianCount = rows.filter(hasExactBenchmark).length;
   const selectedHistory = selected ? history.filter(point => point.providerCode === selected.providerCode && point.planKey === selected.planKey
     && point.cpuCores === selected.cpuCores && point.ramGib === selected.ramGib && point.diskGib === selected.diskGib
-    && point.diskType === selected.diskType && point.region === selected.region).sort((a, b) => a.observedOn.localeCompare(b.observedOn)) : [];
-  const selectedPeers = selected ? exactPeers(selected, rows).sort((a, b) => (a.priceRub ?? Infinity) - (b.priceRub ?? Infinity)) : [];
+    && point.diskType === selected.diskType && point.region === selected.region).sort((a, b) => a.observedOn.localeCompare(b.observedOn))
+    .map(point=>({...point,displayPrice:currency==='RUB'?point.priceRub:currency==='USD'?point.priceUsd:point.priceEur})).filter(point=>point.displayPrice!==null) : [];
+  const selectedPeers = selected ? exactPeers(selected, rows).sort((a, b) => (displayedPrice(a) ?? Infinity) - (displayedPrice(b) ?? Infinity)) : [];
   const selectedCohort = selected?.providerCode === 'aeza' ? cohorts.find(item => item.planKey === selected.planKey) : undefined;
   const selectedBehavior = selected?.providerCode === 'aeza' ? behavior.filter(item => item.planKey === selected.planKey) : [];
   const benchmarkOptions = useMemo(() => [...new Map(benchmarks.map(point => [benchmarkKey(point), point])).entries()]
     .map(([value, point]) => ({ value, label: `${point.planName} · ${number(point.cpuCores)} vCPU / ${number(point.ramGib)} GB / ${number(point.diskGib)} GB · ${point.region}` })), [benchmarks]);
   const benchmarkSeries = useMemo(() => benchmarks.filter(point => benchmarkKey(point) === benchmarkSelection)
-    .sort((a, b) => a.monthStart.localeCompare(b.monthStart)).map(point => ({ ...point, month: point.monthStart.slice(0, 7) })), [benchmarks, benchmarkSelection]);
+    .sort((a, b) => a.monthStart.localeCompare(b.monthStart)).map(point => ({ ...point, month: point.monthStart.slice(0, 7),
+      priceDisplay:currency==='RUB'?point.priceRub:currency==='USD'?point.priceUsd:point.priceEur,
+      medianDisplay:currency==='RUB'?point.marketMedianRub:currency==='USD'?point.marketMedianUsd:point.marketMedianEur,
+      minDisplay:currency==='RUB'?point.providerMedianMinRub:currency==='USD'?point.providerMedianMinUsd:point.providerMedianMinEur,
+      maxDisplay:currency==='RUB'?point.providerMedianMaxRub:currency==='USD'?point.providerMedianMaxUsd:point.providerMedianMaxEur,
+      gapDisplay:currency==='RUB'?point.gapPercent:currency==='USD'?point.gapPercentUsd:point.gapPercentEur,
+    })), [benchmarks, benchmarkSelection,currency]);
 
   const chooseRow = (row: Tariff) => {
     setSelectedKey(current => current === keyOf(row) ? '' : keyOf(row));
@@ -134,7 +154,7 @@ export default function TariffMonitor() {
     </div>
 
     <section className="tariff-benchmark-history"><div className="tariff-market-history-heading"><div><h3>История медианы рынка для Aéza</h3><p>Месячные наблюдения · сперва медиана внутри провайдера, затем между провайдерами · только строгие совпадения</p></div><label>Тариф / конфигурация<GlassSelect value={benchmarkSelection} onChange={setBenchmarkSelection} options={benchmarkOptions.length ? benchmarkOptions : [{ value: '', label: 'Нет строгих сопоставлений' }]}/></label></div>
-      {benchmarkSeries.length ? <><div className="tariff-benchmark-kpis"><div><small>Цена Aéza</small><strong>{rub(benchmarkSeries.at(-1)!.priceRub)}</strong></div><div><small>Медиана рынка</small><strong>{rub(benchmarkSeries.at(-1)!.marketMedianRub)}</strong></div><div><small>Отклонение</small><strong>{benchmarkSeries.at(-1)!.gapPercent >= 0 ? '+' : ''}{benchmarkSeries.at(-1)!.gapPercent.toFixed(1)}%</strong></div><div><small>Провайдеров</small><strong>{benchmarkSeries.at(-1)!.providersAtMedian}</strong></div></div><div className="tariff-benchmark-chart"><ResponsiveContainer><LineChart data={benchmarkSeries}><CartesianGrid stroke="#a9dfff16" vertical={false}/><XAxis dataKey="month" minTickGap={22}/><YAxis tickFormatter={value => number(Number(value))}/><Tooltip formatter={(value, name) => [rub(Number(value)), name === 'priceRub' ? 'Aéza' : 'Медиана рынка']}/><Legend formatter={name => name === 'priceRub' ? 'Aéza' : 'Медиана рынка'}/><Line dataKey="priceRub" name="priceRub" stroke="#78d6ff" strokeWidth={2.5} dot={false}/><Line dataKey="marketMedianRub" name="marketMedianRub" stroke="#f9bc7c" strokeWidth={2.5} dot={false}/></LineChart></ResponsiveContainer></div><p>Разброс медиан провайдеров за последний месяц: {rub(benchmarkSeries.at(-1)!.providerMedianMinRub)}–{rub(benchmarkSeries.at(-1)!.providerMedianMaxRub)}. Каждая точка показывает число независимых поставщиков.</p></> : benchmarkWarning ? <div className="tariff-benchmark-warning"><TriangleAlert size={15}/><span>История медианы сейчас недоступна ({benchmarkWarning}). Текущие цены, медианы и таблица тарифов загружены.</span></div> : <div className="tariff-detail-empty">История появится при наличии снимков Aéza и минимум двух сопоставимых конкурентов в одном месяце. Неизвестные характеристики не считаются совпадением.</div>}
+      {benchmarkSeries.length ? <><div className="tariff-benchmark-kpis"><div><small>Цена Aéza</small><strong>{formatDisplayed(benchmarkSeries.at(-1)!.priceDisplay)}</strong></div><div><small>Медиана рынка</small><strong>{formatDisplayed(benchmarkSeries.at(-1)!.medianDisplay)}</strong></div><div><small>Отклонение</small><strong>{benchmarkSeries.at(-1)!.gapDisplay == null ? 'Нет курса на дату' : `${benchmarkSeries.at(-1)!.gapDisplay! >= 0 ? '+' : ''}${benchmarkSeries.at(-1)!.gapDisplay!.toFixed(1)}%`}</strong></div><div><small>Провайдеров</small><strong>{benchmarkSeries.at(-1)!.providersAtMedian}</strong></div></div><div className="tariff-benchmark-chart"><ResponsiveContainer><LineChart data={benchmarkSeries}><CartesianGrid stroke="#a9dfff16" vertical={false}/><XAxis dataKey="month" minTickGap={22}/><YAxis tickFormatter={value => number(Number(value))}/><Tooltip formatter={(value, name) => [formatDisplayed(Number(value)), name === 'priceDisplay' ? 'Aéza' : 'Медиана рынка']}/><Legend formatter={name => name === 'priceDisplay' ? 'Aéza' : 'Медиана рынка'}/><Line dataKey="priceDisplay" name="priceDisplay" stroke="#78d6ff" strokeWidth={2.5} dot={false}/><Line dataKey="medianDisplay" name="medianDisplay" stroke="#f9bc7c" strokeWidth={2.5} dot={false}/></LineChart></ResponsiveContainer></div><p>Разброс медиан провайдеров за последний месяц: {formatDisplayed(benchmarkSeries.at(-1)!.minDisplay)}–{formatDisplayed(benchmarkSeries.at(-1)!.maxDisplay)}. Каждая точка показывает число независимых поставщиков.</p></> : benchmarkWarning ? <div className="tariff-benchmark-warning"><TriangleAlert size={15}/><span>История медианы сейчас недоступна ({benchmarkWarning}). Текущие цены, медианы и таблица тарифов загружены.</span></div> : <div className="tariff-detail-empty">История появится при наличии снимков Aéza и минимум двух конкурентов с полными данными и курсами на даты наблюдений.</div>}
     </section>
 
     <div className="tariff-controls">
@@ -145,7 +165,7 @@ export default function TariffMonitor() {
     </div>
 
     <section className="tariff-table-panel">
-      <div className="tariff-table-heading"><div><strong>Тарифы и рыночное сравнение</strong><span>Показаны реальные цены и изменения из сохранённых снимков.</span></div><small>{filteredRows.length} тарифов</small></div>
+      <div className="tariff-table-heading"><div><strong>Тарифы и рыночное сравнение</strong><span>Цены показаны в {currency}; для старых наблюдений используются курсы на дату фиксации.</span></div><small>{filteredRows.length} тарифов</small></div>
       <div className="table-scroll"><table className="tariff-table"><thead><tr><th>Тариф / провайдер</th><th>Конфигурация</th><th>Регион и условия</th><th>Цена / мес.</th><th>Медиана конкурентов</th><th>Изменение цены</th><th>Клиенты Aéza</th><th>Детали</th></tr></thead><tbody>
         {visibleRows.map(row => {
           const cohort = row.providerCode === 'aeza' ? cohorts.find(item => item.planKey === row.planKey) : undefined;
@@ -154,9 +174,9 @@ export default function TariffMonitor() {
             <td><strong>{row.planName}</strong><small>{row.provider}</small></td>
             <td>{number(row.cpuCores)} vCPU · {number(row.ramGib)} GB RAM<br/>{number(row.diskGib)} GB {row.diskType ?? 'диск неизвестен'}</td>
             <td>{row.region ?? 'Регион неизвестен'}<small>{row.vatIncluded === null ? 'НДС неизвестен' : row.vatIncluded ? 'НДС включён' : 'Без НДС'} · {row.trafficUnlimited ? 'трафик безлимитный' : row.trafficGib === null ? 'трафик неизвестен' : number(row.trafficGib) + ' GB трафика'}</small></td>
-            <td><strong className="tariff-price-value">{rub(row.priceRub)}</strong><small>{row.originalPrice === null ? 'Цена недоступна' : number(row.originalPrice) + ' ' + (row.currency ?? '') + ' / ' + (row.billingPeriod ?? 'период не указан')}</small></td>
-            <td>{hasExactBenchmark(row) ? <><strong>{rub(row.marketMedianRub)}</strong><small>{row.providersAtMedian} провайдера · точное совпадение</small></> : <span className="tariff-no-data">Недостаточно данных</span>}</td>
-            <td>{row.changePercent === null ? <span className="tariff-no-data">Недостаточно данных</span> : <><strong className={row.changePercent <= 0 ? 'market-positive' : 'market-negative'}>{row.changePercent <= 0 ? <ArrowDownRight size={13}/> : <ArrowUpRight size={13}/>} {row.changePercent >= 0 ? '+' : ''}{row.changePercent.toFixed(1)}%</strong><small>{rub(row.previousPriceRub)} → {rub(row.priceRub)}</small></>}</td>
+            <td><strong className="tariff-price-value">{money(row.priceRub,row.priceUsd,row.priceEur)}</strong><small>{row.originalPrice === null ? 'Цена недоступна' : number(row.originalPrice) + ' ' + (row.currency ?? '') + ' / ' + (row.billingPeriod ?? 'период не указан')} · курс {currency} на {currency==='USD'?row.usdRateOn??'нет данных':currency==='EUR'?row.eurRateOn??'нет данных':row.rubRateOn??row.observedOn}</small></td>
+            <td>{hasExactBenchmark(row) ? <><strong>{money(row.marketMedianRub,row.marketMedianUsd,row.marketMedianEur)}</strong><small>{row.providersAtMedian} провайдера · точное совпадение</small></> : <span className="tariff-no-data">Недостаточно данных</span>}</td>
+            <td>{changeForCurrency(row) === null ? <span className="tariff-no-data">Недостаточно данных</span> : <><strong className={changeForCurrency(row)! <= 0 ? 'market-positive' : 'market-negative'}>{changeForCurrency(row)! <= 0 ? <ArrowDownRight size={13}/> : <ArrowUpRight size={13}/>} {changeForCurrency(row)! >= 0 ? '+' : ''}{changeForCurrency(row)!.toFixed(1)}%</strong><small>{money(row.previousPriceRub,row.previousPriceUsd,row.previousPriceEur)} → {money(row.priceRub,row.priceUsd,row.priceEur)}</small></>}</td>
             <td>{row.providerCode === 'aeza' ? cohort ? <><strong>{cohort.accounts} клиентов · {cohort.linkedServices} услуг</strong><small>Ожидают продления: {cohort.awaitingRenewal} · неактивны: {cohort.inactiveServices}</small></> : <span className="tariff-no-data">Нет связанных услуг</span> : <span className="tariff-not-applicable">Только для тарифов Aéza</span>}</td>
             <td><button type="button" className="tariff-open-row" onClick={event => { event.stopPropagation(); chooseRow(row); }}>{active ? 'Закрыть' : 'Открыть'}{active ? <X size={14}/> : <ChevronRight size={14}/>}</button></td>
           </tr>;
@@ -169,12 +189,12 @@ export default function TariffMonitor() {
     {selected && <section className="tariff-detail" aria-label={'Подробности тарифа ' + selected.planName}>
       <div className="tariff-detail-heading"><div><span className="tariff-detail-provider">{selected.provider}</span><h3>{selected.planName}</h3><p>{number(selected.cpuCores)} vCPU · {number(selected.ramGib)} GB RAM · {number(selected.diskGib)} GB {selected.diskType ?? 'диск неизвестен'} · {selected.region ?? 'регион неизвестен'}</p></div><button type="button" aria-label="Закрыть детали тарифа" onClick={() => setSelectedKey('')}><X size={17}/></button></div>
       <div className="tariff-detail-grid">
-        <section className="tariff-detail-card tariff-history-card"><div className="tariff-detail-card-heading"><div><strong>История цены</strong><span>{selectedHistory.length} фактических наблюдений · ₽/мес.</span></div><a href={selected.sourceUrl} target="_blank" rel="noreferrer">Источник тарифа <ArrowUpRight size={13}/></a></div>
-          {selectedHistory.length > 1 ? <div className="tariff-detail-chart"><ResponsiveContainer><LineChart data={selectedHistory} margin={{ top: 10, right: 14, bottom: 3, left: 2 }}><CartesianGrid stroke="#a9dfff16" vertical={false}/><XAxis dataKey="observedOn" tickFormatter={dateLabel} minTickGap={22} tick={{ fill: '#89a7bb', fontSize: 9 }} axisLine={false} tickLine={false}/><YAxis domain={['auto', 'auto']} tickFormatter={value => number(Number(value))} tick={{ fill: '#89a7bb', fontSize: 9 }} axisLine={false} tickLine={false} width={48}/><Tooltip labelFormatter={value => dateLabel(String(value))} formatter={value => [rub(Number(value)), 'Цена / мес.']} contentStyle={{ background: '#10283d', border: '1px solid #6ab9e533', borderRadius: 9, color: '#e4f4ff' }}/><Line type="monotone" dataKey="priceRub" stroke="#78d6ff" strokeWidth={2.5} dot={{ r: 3, fill: '#10283d', stroke: '#78d6ff', strokeWidth: 2 }}/></LineChart></ResponsiveContainer></div> : <div className="tariff-detail-empty">{selectedHistory.length === 1 ? 'Есть только один снимок: для графика нужна ещё одна точка.' : 'Исторических снимков нет.'}</div>}
+        <section className="tariff-detail-card tariff-history-card"><div className="tariff-detail-card-heading"><div><strong>История цены</strong><span>{selectedHistory.length} наблюдений · {currency} за месяц · курс на дату наблюдения</span></div><a href={selected.sourceUrl} target="_blank" rel="noreferrer">Источник тарифа <ArrowUpRight size={13}/></a></div>
+          {selectedHistory.length > 1 ? <div className="tariff-detail-chart"><ResponsiveContainer><LineChart data={selectedHistory} margin={{ top: 10, right: 14, bottom: 3, left: 2 }}><CartesianGrid stroke="#a9dfff16" vertical={false}/><XAxis dataKey="observedOn" tickFormatter={dateLabel} minTickGap={22} tick={{ fill: '#89a7bb', fontSize: 9 }} axisLine={false} tickLine={false}/><YAxis domain={['auto', 'auto']} tickFormatter={value => number(Number(value))} tick={{ fill: '#89a7bb', fontSize: 9 }} axisLine={false} tickLine={false} width={48}/><Tooltip labelFormatter={value => dateLabel(String(value))} formatter={value => [formatDisplayed(Number(value)), 'Цена / мес.']} contentStyle={{ background: '#10283d', border: '1px solid #6ab9e533', borderRadius: 9, color: '#e4f4ff' }}/><Line type="monotone" dataKey="displayPrice" stroke="#78d6ff" strokeWidth={2.5} dot={{ r: 3, fill: '#10283d', stroke: '#78d6ff', strokeWidth: 2 }}/></LineChart></ResponsiveContainer></div> : <div className="tariff-detail-empty">{selectedHistory.length === 1 ? 'Есть только один снимок с доступным курсом: для графика нужна ещё одна точка.' : 'История или курс на дату наблюдения недоступны.'}</div>}
         </section>
         <section className="tariff-detail-card"><div className="tariff-detail-card-heading"><div><strong>Сравнение с конкурентами</strong><span>Совпадение конфигурации, региона, НДС и трафика</span></div></div>
-          {hasExactBenchmark(selected) && <div className="tariff-market-median"><small>Медиана рынка</small><strong>{rub(selected.marketMedianRub)}</strong><span>{selected.providersAtMedian} конкурента · {selected.priceRub !== null && selected.marketMedianRub ? ((selected.priceRub / selected.marketMedianRub - 1) * 100 >= 0 ? '+' : '') + ((selected.priceRub / selected.marketMedianRub - 1) * 100).toFixed(1) + '% к медиане' : ''}</span></div>}
-          {selectedPeers.length > 0 ? <div className="tariff-peer-list">{selectedPeers.map(peer => <div key={keyOf(peer)}><span><strong>{peer.provider}</strong><small>{peer.planName} · {dateLabel(peer.observedOn)}</small></span><b>{rub(peer.priceRub)}</b>{selected.priceRub !== null && peer.priceRub !== null && <em className={peer.priceRub <= selected.priceRub ? 'is-cheaper' : ''}>{((peer.priceRub / selected.priceRub - 1) * 100 >= 0 ? '+' : '') + ((peer.priceRub / selected.priceRub - 1) * 100).toFixed(1)}%</em>}</div>)}</div> : <p className="tariff-detail-empty">Недостаточно совпадающих предложений для поштучного сравнения.</p>}
+          {hasExactBenchmark(selected) && <div className="tariff-market-median"><small>Медиана рынка</small><strong>{money(selected.marketMedianRub,selected.marketMedianUsd,selected.marketMedianEur)}</strong><span>{selected.providersAtMedian} конкурента · {displayedPrice(selected)!==null && (currency==='RUB'?selected.marketMedianRub:currency==='USD'?selected.marketMedianUsd:selected.marketMedianEur) ? `${((displayedPrice(selected)! / (currency==='RUB'?selected.marketMedianRub!:currency==='USD'?selected.marketMedianUsd!:selected.marketMedianEur!) - 1) * 100 >= 0 ? '+' : '')}${((displayedPrice(selected)! / (currency==='RUB'?selected.marketMedianRub!:currency==='USD'?selected.marketMedianUsd!:selected.marketMedianEur!) - 1) * 100).toFixed(1)}% к медиане` : 'Нет курса на дату'}</span></div>}
+          {selectedPeers.length > 0 ? <div className="tariff-peer-list">{selectedPeers.map(peer => {const peerPrice=displayedPrice(peer),ownPrice=displayedPrice(selected);return <div key={keyOf(peer)}><span><strong>{peer.provider}</strong><small>{peer.planName} · {dateLabel(peer.observedOn)}</small></span><b>{money(peer.priceRub,peer.priceUsd,peer.priceEur)}</b>{ownPrice!==null&&peerPrice!==null&&<em className={peerPrice<=ownPrice?'is-cheaper':''}>{(peerPrice/ownPrice-1>=0?'+':'')+((peerPrice/ownPrice-1)*100).toFixed(1)}%</em>}</div>;})}</div> : <p className="tariff-detail-empty">Недостаточно совпадающих предложений с сохранёнными курсами на даты наблюдений.</p>}
           {selected.marketMedianRub === null && <p className="tariff-detail-note">Медиана скрыта: API не нашёл минимум два предложения с полным совпадением условий.</p>}
         </section>
         <section className="tariff-detail-card tariff-behavior-card"><div className="tariff-detail-card-heading"><div><strong>Поведение клиентов до и после изменения цены</strong><span>Фактические продления и события из PostgreSQL · совпадение по времени не доказывает причинность</span></div></div>

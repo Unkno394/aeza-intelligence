@@ -7,6 +7,8 @@ pub struct SegmentMonth {
     pub decisions: usize,
     pub aeza_at_risk: usize,
     pub aeza_active: usize,
+    pub aeza_revenue_rub: f64,
+    pub renewals: usize,
     pub loss_rate: Option<f64>,
     pub first_leases: usize,
     pub market_returns: usize,
@@ -25,6 +27,7 @@ impl SegmentMonth {
         next: Option<usize>,
         forced: bool,
         reason: &str,
+        aeza_revenue_rub: f64,
     ) {
         self.decisions += 1;
         *self.reasons.entry(reason.into()).or_default() += 1;
@@ -32,6 +35,8 @@ impl SegmentMonth {
         let to = next.map(|i| plans[i].provider.as_str());
         self.aeza_at_risk += usize::from(from == Some("aeza"));
         self.aeza_active += usize::from(to == Some("aeza"));
+        self.aeza_revenue_rub += aeza_revenue_rub;
+        self.renewals += usize::from(from == Some("aeza") && to == Some("aeza"));
         if to == Some("aeza") && from != Some("aeza") {
             if from.is_some() {
                 self.switches_in += 1;
@@ -229,7 +234,7 @@ pub fn analyze_report(report: Report) -> serde_json::Value {
     }
     for (key,text) in [("aeza_resources","Есть решения, где ни один доступный тариф Aéza не покрывает минимальные ресурсы. Проверьте линейку CPU/RAM/диска; снижение цены не устраняет этот этап ограничения."),("aeza_region","Есть решения без подходящего региона Aéza. Проверьте доступность нужных локаций; ценовая скидка не устраняет географическое ограничение."),("aeza_capacity","Есть решения без свободной мощности Aéza. Проверьте квоты до стимулирования спроса; инвестиционная окупаемость расширения здесь не рассчитана."),("aeza_budget","Есть решения, где подходящий тариф Aéza превышает бюджет. Проверьте результаты скидок ниже; улучшение прибыли не гарантируется."),("exogenous_departure_unknown_cause","Не назначайте случайным уходам ценовую причину: в модели это независимая вероятность. Для мер удержания нужны дополнительные наблюдения.")] {if let Some(n)=reasons.get(key){if *n>0 {actions.push(json!({"reason":key,"decision_events":n,"text":text,"status":"diagnostic_only_not_verified_intervention"}));}}}
     let candidates:Vec<_>=report.runs.iter().map(|r| {let mut v=summarize(r);
-    v["segment_effects"]=json!(report.scenario.segments.iter().enumerate().map(|(index,g)|{let stats=|run:&Run|{let rows:Vec<_>=run.months.iter().flat_map(|m|&m.buyer_behavior).filter(|b|b.segment_index==index).collect();[rows.iter().map(|b|b.aeza_active).sum::<usize>() as i64,rows.iter().map(|b|b.first_leases+b.market_returns+b.switches_in).sum::<usize>() as i64,rows.iter().map(|b|b.switches_out+b.exogenous_exits+b.choice_exits).sum::<usize>() as i64]};let current=stats(r);let base=stats(control);json!({"segment":g.name,"segment_index":index,"lease_months":current[0],"delta_lease_months":current[0]-base[0],"acquisitions":current[1],"delta_acquisitions":current[1]-base[1],"losses":current[2],"delta_losses":current[2]-base[2]})}).collect::<Vec<_>>());v["delta_final_clients"]=json!(r.months.last().unwrap().providers["aeza"].active_leases as i64-control.months.last().unwrap().providers["aeza"].active_leases as i64);v["delta_profit_rub"]=json!(money::float(profit_ticks(r)-profit_ticks(control)));v}).collect();
+    v["segment_effects"]=json!(report.scenario.segments.iter().enumerate().map(|(index,g)|{let stats=|run:&Run|{let rows:Vec<_>=run.months.iter().flat_map(|m|&m.buyer_behavior).filter(|b|b.segment_index==index).collect();[rows.iter().map(|b|b.aeza_active).sum::<usize>() as i64,rows.iter().map(|b|b.first_leases+b.market_returns+b.switches_in).sum::<usize>() as i64,rows.iter().map(|b|b.renewals).sum::<usize>() as i64,rows.iter().map(|b|b.switches_out+b.exogenous_exits+b.choice_exits).sum::<usize>() as i64]};let current=stats(r);let base=stats(control);json!({"segment":g.name,"segment_index":index,"lease_months":current[0],"delta_lease_months":current[0]-base[0],"acquisitions":current[1],"delta_acquisitions":current[1]-base[1],"renewals":current[2],"delta_renewals":current[2]-base[2],"losses":current[3],"delta_losses":current[3]-base[3]})}).collect::<Vec<_>>());v["delta_final_clients"]=json!(r.months.last().unwrap().providers["aeza"].active_leases as i64-control.months.last().unwrap().providers["aeza"].active_leases as i64);v["delta_profit_rub"]=json!(money::float(profit_ticks(r)-profit_ticks(control)));v}).collect();
     let best = report.runs.iter().max_by_key(|r| profit_ticks(r)).unwrap();
     let improving = profit_ticks(best) > profit_ticks(control);
     let advice = if improving {

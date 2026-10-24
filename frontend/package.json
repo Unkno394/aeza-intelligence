@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
-    "test": "tsx --test src/features/risk/model.test.ts src/features/market/scenario.test.ts"
+    "test": "node --import tsx --test src/features/risk/model.test.ts src/features/risk/settingsPreview.test.ts src/features/market/scenario.test.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.0",

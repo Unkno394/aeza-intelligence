@@ -12,7 +12,11 @@ export function competitionScenario(draft: Scenario, mode: CompetitionMode, comp
     {name:'recovery', aeza_price_multipliers:Array.from({length:draft.months},(_,i)=>i<2?1:i<4?1.3:.7)},
   ];
   if (region) scenario.segments.forEach(s=>{s.region=region;});
-  scenario.market_events = mode==='competitor_cut' ? [{plan_id:competitorId,starts_month:3,price_multiplier:.7,available:true,strategy:null}]
-    : mode==='entry' ? [{plan_id:competitorId,starts_month:1,price_multiplier:1,available:false,strategy:null},{plan_id:competitorId,starts_month:3,price_multiplier:1,available:true,strategy:null}] : [];
+  // Keep Market Intelligence observations and unrelated scenario events intact.
+  // A synthetic experiment replaces only the selected tariff's event schedule.
+  const otherEvents=(draft.market_events??[]).filter(event=>event.plan_id!==competitorId);
+  const selectedEvents=mode==='competitor_cut' ? [{plan_id:competitorId,starts_month:3,price_multiplier:.7,available:true,strategy:null}]
+    : mode==='entry' ? [{plan_id:competitorId,starts_month:1,price_multiplier:1,available:false,strategy:null},{plan_id:competitorId,starts_month:3,price_multiplier:1,available:true,strategy:null}] : (draft.market_events??[]).filter(event=>event.plan_id===competitorId);
+  scenario.market_events=[...otherEvents,...selectedEvents];
   return scenario;
 }

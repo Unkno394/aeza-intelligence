@@ -25,6 +25,7 @@ use openidconnect::{
     url::Url,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::sync::Mutex;
 
@@ -66,6 +67,10 @@ pub struct AuthArgs {
     /// Serve every request as a local superadmin. Only for development and checks.
     #[arg(long, env = "AUTH_DISABLED")]
     auth_disabled: bool,
+    #[arg(long, env = "LOCAL_ADMIN_USER")]
+    local_admin_user: Option<String>,
+    #[arg(long, env = "LOCAL_ADMIN_PASSWORD", hide_env_values = true)]
+    local_admin_password: Option<String>,
 }
 
 #[derive(Clone, Serialize, sqlx::FromRow)]
@@ -92,6 +97,15 @@ pub struct Session {
 
 pub struct Auth {
     oidc: Option<Oidc>,
+    local: Option<Local>,
+}
+
+struct Local {
+    user: String,
+    password: String,
+    origin: String,
+    session_hours: i32,
+    sessions: Mutex<HashMap<String, Instant>>,
 }
 
 struct Oidc {
@@ -116,7 +130,22 @@ impl Auth {
     pub async fn new(args: AuthArgs) -> Result<Arc<Self>> {
         if args.auth_disabled {
             eprintln!("WARNING: authentication is disabled, every request acts as superadmin");
-            return Ok(Arc::new(Self { oidc: None }));
+            return Ok(Arc::new(Self { oidc: None, local: None }));
+        }
+        let local = if let (Some(user), Some(password)) = (args.local_admin_user.as_ref(), args.local_admin_password.as_ref()) {
+            anyhow::ensure!(!user.is_empty() && password.len() >= 16, "LOCAL_ADMIN_USER is required and LOCAL_ADMIN_PASSWORD must be at least 16 characters");
+            anyhow::ensure!((1..=720).contains(&args.session_hours), "SESSION_HOURS must be between 1 and 720");
+            Some(Local {
+                    user: user.clone(),
+                    password: password.clone(),
+                    origin: args.public_url.as_deref().unwrap_or_default().trim_end_matches('/').to_owned(),
+                    session_hours: args.session_hours,
+                    sessions: Mutex::new(HashMap::new()),
+                })
+        } else { None };
+        if args.oidc_issuer.as_deref().is_none_or(str::is_empty) {
+            anyhow::ensure!(local.is_some(), "OIDC_ISSUER or LOCAL_ADMIN_USER/LOCAL_ADMIN_PASSWORD is required");
+            return Ok(Arc::new(Self { oidc: None, local }));
         }
         let required = |value: Option<String>, name: &str| {
             value.filter(|value| !value.is_empty()).with_context(|| {
@@ -180,12 +209,25 @@ impl Auth {
                 session_hours: args.session_hours,
                 pending: Mutex::new(HashMap::new()),
             }),
+            local,
         }))
     }
 
     /// The admin behind the request's session cookie, if the session is live.
     async fn session(&self, pool: &PgPool, headers: &HeaderMap) -> sqlx::Result<Option<Session>> {
-        if self.oidc.is_none() {
+        if let Some(local) = &self.local {
+            if let Some(token) = cookie(headers, SESSION_COOKIE) {
+                let mut sessions = local.sessions.lock().await;
+                sessions.retain(|_, expires| *expires > Instant::now());
+                if sessions.contains_key(token) {
+                    return Ok(Some(Session {
+                        admin: Admin { id: 0, email: local.user.clone(), name: "Local admin".into(), role: "superadmin".into() },
+                        token: Some(token.to_owned()),
+                    }));
+                }
+            }
+        }
+        if self.oidc.is_none() && self.local.is_none() {
             return Ok(Some(Session {
                 admin: Admin {
                     id: 0,
@@ -208,6 +250,11 @@ impl Auth {
     /// Whether a session taken earlier (e.g. by a long-lived WebSocket) is
     /// still unexpired and its admin still active.
     pub async fn is_live(&self, pool: &PgPool, session: &Session) -> bool {
+        if let Some(local) = &self.local {
+            if let Some(token) = &session.token {
+                if local.sessions.lock().await.get(token).is_some_and(|expires| *expires > Instant::now()) { return true; }
+            }
+        }
         match &session.token {
             None => true,
             Some(token) => matches!(find_session(pool, token).await, Ok(Some(_))),
@@ -216,6 +263,10 @@ impl Auth {
 
     /// Cross-site WebSocket and state-changing requests must come from PUBLIC_URL.
     fn origin_allowed(&self, method: &Method, headers: &HeaderMap) -> bool {
+        if let Some(local) = &self.local {
+            if method == Method::GET && !headers.contains_key(header::UPGRADE) { return true; }
+            return headers.get(header::ORIGIN).is_none_or(|origin| origin.as_bytes() == local.origin.as_bytes());
+        }
         let Some(oidc) = &self.oidc else {
             return true;
         };
@@ -231,6 +282,7 @@ impl Auth {
     }
 
     fn secure(&self) -> bool {
+        if let Some(local) = &self.local { return local.origin.starts_with("https://"); }
         self.oidc
             .as_ref()
             .is_some_and(|oidc| oidc.origin.starts_with("https://"))
@@ -330,6 +382,10 @@ pub async fn me(axum::Extension(session): axum::Extension<Session>) -> Json<Admi
     Json(session.admin)
 }
 
+pub async fn methods(State(auth): State<Arc<Auth>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({"sso": auth.oidc.is_some(), "local": auth.local.is_some()}))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginQuery {
@@ -383,6 +439,27 @@ pub async fn login(State(auth): State<Arc<Auth>>, Query(query): Query<LoginQuery
         Redirect::to(url.as_str()),
     )
         .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct LocalCredentials { username: String, password: String }
+
+pub async fn local_login(State(auth): State<Arc<Auth>>, headers: HeaderMap, Json(credentials): Json<LocalCredentials>) -> Response {
+    let Some(local) = &auth.local else { return StatusCode::NOT_FOUND.into_response(); };
+    if !auth.origin_allowed(&Method::POST, &headers) { return StatusCode::FORBIDDEN.into_response(); }
+    let expected = Sha256::digest(local.password.as_bytes());
+    let supplied = Sha256::digest(credentials.password.as_bytes());
+    let mut difference = 0u8;
+    for (a, b) in expected.iter().zip(supplied.iter()) { difference |= a ^ b; }
+    if credentials.username != local.user || difference != 0 {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"invalid_credentials"}))).into_response();
+    }
+    let token = CsrfToken::new_random_len(32).secret().clone();
+    let lifetime = i64::from(local.session_hours) * 3600;
+    let mut sessions = local.sessions.lock().await;
+    sessions.retain(|_, expires| *expires > Instant::now());
+    sessions.insert(token.clone(), Instant::now() + Duration::from_secs(lifetime as u64));
+    (AppendHeaders([(header::SET_COOKIE, auth.set_cookie(SESSION_COOKIE, &token, "/", lifetime))]), StatusCode::NO_CONTENT).into_response()
 }
 
 #[derive(Deserialize)]
@@ -545,6 +622,14 @@ pub async fn logout(
     State(pool): State<PgPool>,
     headers: HeaderMap,
 ) -> Response {
+    if let Some(local) = &auth.local {
+        if !auth.origin_allowed(&Method::POST, &headers) { return StatusCode::FORBIDDEN.into_response(); }
+        if let Some(token) = cookie(&headers, SESSION_COOKIE) {
+            if local.sessions.lock().await.remove(token).is_some() {
+                return (AppendHeaders([(header::SET_COOKIE, auth.set_cookie(SESSION_COOKIE, "", "/", 0))]), Json(LogoutResponse { logout_url: None })).into_response();
+            }
+        }
+    }
     let Some(oidc) = &auth.oidc else {
         return Json(LogoutResponse { logout_url: None }).into_response();
     };

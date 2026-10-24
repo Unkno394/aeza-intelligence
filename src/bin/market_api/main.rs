@@ -88,12 +88,28 @@ struct MonitoredTariff {
     disk_gib: Option<f64>,
     disk_type: Option<String>,
     region: Option<String>,
+    source_kind: String,
     observed_on: NaiveDate,
+    effective_at: Option<DateTime<Utc>>,
+    retrieved_at: DateTime<Utc>,
     price_rub: Option<f64>,
     previous_price_rub: Option<f64>,
+    price_usd: Option<f64>,
+    previous_price_usd: Option<f64>,
+    price_eur: Option<f64>,
+    previous_price_eur: Option<f64>,
+    rub_rate_on: Option<NaiveDate>,
+    usd_rub_rate: Option<f64>,
+    usd_rate_on: Option<NaiveDate>,
+    eur_rub_rate: Option<f64>,
+    eur_rate_on: Option<NaiveDate>,
     change_percent: Option<f64>,
+    change_percent_usd: Option<f64>,
+    change_percent_eur: Option<f64>,
     history_points: i64,
     market_median_rub: Option<f64>,
+    market_median_usd: Option<f64>,
+    market_median_eur: Option<f64>,
     providers_at_median: i64,
     currency: Option<String>,
     original_price: Option<f64>,
@@ -120,6 +136,12 @@ struct TariffHistoryPoint {
     region: Option<String>,
     observed_on: NaiveDate,
     price_rub: f64,
+    price_usd: Option<f64>,
+    price_eur: Option<f64>,
+    usd_rub_rate: Option<f64>,
+    usd_rate_on: Option<NaiveDate>,
+    eur_rub_rate: Option<f64>,
+    eur_rate_on: Option<NaiveDate>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -134,11 +156,21 @@ struct BenchmarkHistoryPoint {
     disk_type: String,
     region: String,
     price_rub: f64,
+    price_usd: Option<f64>,
+    price_eur: Option<f64>,
     market_median_rub: f64,
+    market_median_usd: Option<f64>,
+    market_median_eur: Option<f64>,
     provider_median_min_rub: f64,
     provider_median_max_rub: f64,
+    provider_median_min_usd: Option<f64>,
+    provider_median_max_usd: Option<f64>,
+    provider_median_min_eur: Option<f64>,
+    provider_median_max_eur: Option<f64>,
     providers_at_median: i64,
     gap_percent: f64,
+    gap_percent_usd: Option<f64>,
+    gap_percent_eur: Option<f64>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -299,8 +331,36 @@ struct ClientDataset {
 #[serde(rename_all = "camelCase")]
 struct HistoryPoint {
     observed_on: NaiveDate,
+    settings_version: i64,
+    historical_min_days: Option<i64>,
     assessment: serde_json::Value,
     features: serde_json::Value,
+}
+
+#[derive(Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+struct SettingsMetadata {
+    version: i64,
+    updated_at: Option<DateTime<Utc>>,
+    updated_by: Option<String>,
+}
+
+impl Default for SettingsMetadata {
+    fn default() -> Self {
+        Self {
+            version: 0,
+            updated_at: None,
+            updated_by: None,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct StoredSettings {
+    settings: serde_json::Value,
+    version: i64,
+    updated_at: DateTime<Utc>,
+    updated_by: String,
 }
 
 #[derive(Serialize)]
@@ -318,7 +378,7 @@ struct SnapshotSettings {
     medium_threshold: i64,
     high_threshold: i64,
     renewal_window_days: i64,
-    /// Used only by the frontend Historical page; stored with the other settings.
+    /// Minimum history span before the Historical Model makes confident claims.
     #[serde(default = "default_historical_min_days")]
     historical_min_days: i64,
 }
@@ -390,6 +450,7 @@ struct SnapshotRisk {
     payment_coverage: Option<f64>,
     assessment_status: &'static str,
     available_factors: usize,
+    settings_version: i64,
 }
 
 #[derive(Serialize, PartialEq)]
@@ -456,7 +517,8 @@ async fn main() -> Result<()> {
             state.clone(),
             auth::require_admin,
         ))
-        .route("/api/auth/login", get(auth::login))
+        .route("/api/auth/login", get(auth::login).post(auth::local_login))
+        .route("/api/auth/methods", get(auth::methods))
         .route("/api/auth/callback", get(auth::callback))
         .route("/api/auth/logout", post(auth::logout))
         .with_state(state);
@@ -497,14 +559,14 @@ enum ServerMessage<'a> {
     Snapshot {
         dataset: &'a ClientDataset,
         settings: &'a SnapshotSettings,
+        settings_metadata: &'a SettingsMetadata,
         risks: Vec<&'a SnapshotRisk>,
     },
     /// Accounts, services or transactions changed.
-    Dataset {
-        dataset: &'a ClientDataset,
-    },
+    Dataset { dataset: &'a ClientDataset },
     Settings {
         settings: &'a SnapshotSettings,
+        settings_metadata: &'a SettingsMetadata,
     },
     /// Only the accounts whose Risk Score changed.
     Scores {
@@ -513,6 +575,7 @@ enum ServerMessage<'a> {
     },
     Ack {
         request_id: &'a str,
+        settings_metadata: &'a SettingsMetadata,
     },
     Error {
         request_id: Option<&'a str>,
@@ -566,6 +629,7 @@ struct Live {
 
 struct LiveState {
     settings: SnapshotSettings,
+    settings_metadata: SettingsMetadata,
     dataset: ClientDataset,
     risks: Risks,
     /// Latest operation_logs id: every write to the client tables appends a row.
@@ -574,14 +638,16 @@ struct LiveState {
 
 impl Live {
     async fn start(pool: PgPool) -> Result<Arc<Self>> {
-        let settings = load_settings(&pool).await?;
+        let (settings, settings_metadata) = load_settings(&pool).await?;
         let log_id = last_log_id(&pool).await?;
         let dataset = load_dataset(&pool).await?;
-        let risks = load_risks(&pool, &settings).await?;
+        let mut risks = load_risks(&pool, &settings).await?;
+        set_settings_version(&mut risks, settings_metadata.version);
         let live = Arc::new(Self {
             events: broadcast::channel(64).0,
             state: Mutex::new(LiveState {
                 settings,
+                settings_metadata,
                 dataset,
                 risks,
                 log_id,
@@ -624,7 +690,8 @@ impl Live {
                 dataset: &state.dataset,
             });
         }
-        let risks = load_risks(pool, &state.settings).await?;
+        let mut risks = load_risks(pool, &state.settings).await?;
+        set_settings_version(&mut risks, state.settings_metadata.version);
         self.replace_risks(&mut state, risks);
         Ok(true)
     }
@@ -641,27 +708,34 @@ impl Live {
         &self,
         pool: &PgPool,
         settings: SnapshotSettings,
-    ) -> Result<(), &'static str> {
+        updated_by: &str,
+    ) -> Result<SettingsMetadata, &'static str> {
         if !settings.is_valid() {
             return Err("Некорректные настройки");
         }
         // Held across the writes so concurrent updates reach the database and
         // the sessions in the same order.
         let mut state = self.state.lock().await;
-        let risks = load_risks(pool, &settings).await.map_err(|error| {
+        let mut risks = load_risks(pool, &settings).await.map_err(|error| {
             eprintln!("risk calculation for new settings failed: {error:#}");
             "Не удалось пересчитать Risk Score"
         })?;
-        save_settings(pool, &settings).await.map_err(|error| {
-            eprintln!("saving client settings failed: {error}");
-            "Не удалось сохранить настройки"
-        })?;
+        let settings_metadata =
+            save_settings(pool, &settings, updated_by)
+                .await
+                .map_err(|error| {
+                    eprintln!("saving client settings failed: {error}");
+                    "Не удалось сохранить настройки"
+                })?;
+        set_settings_version(&mut risks, settings_metadata.version);
         state.settings = settings;
+        state.settings_metadata = settings_metadata;
         self.publish(&ServerMessage::Settings {
             settings: &state.settings,
+            settings_metadata: &state.settings_metadata,
         });
         self.replace_risks(&mut state, risks);
-        Ok(())
+        Ok(state.settings_metadata.clone())
     }
 
     async fn snapshot(&self) -> Utf8Bytes {
@@ -669,6 +743,7 @@ impl Live {
         encode(&ServerMessage::Snapshot {
             dataset: &state.dataset,
             settings: &state.settings,
+            settings_metadata: &state.settings_metadata,
             risks: state.risks.values().collect(),
         })
     }
@@ -684,9 +759,10 @@ impl Live {
             Ok(ClientMessage::UpdateSettings {
                 request_id,
                 settings,
-            }) => match self.update_settings(pool, settings).await {
-                Ok(()) => encode(&ServerMessage::Ack {
+            }) => match self.update_settings(pool, settings, &admin.email).await {
+                Ok(settings_metadata) => encode(&ServerMessage::Ack {
                     request_id: &request_id,
+                    settings_metadata: &settings_metadata,
                 }),
                 Err(message) => encode(&ServerMessage::Error {
                     request_id: Some(&request_id),
@@ -759,33 +835,65 @@ async fn serve_socket(mut socket: WebSocket, state: AppState, session: Session) 
     }
 }
 
-async fn load_settings(pool: &PgPool) -> Result<SnapshotSettings, sqlx::Error> {
-    let stored: Option<serde_json::Value> =
-        sqlx::query_scalar("SELECT settings FROM public.client_settings WHERE id")
-            .fetch_optional(pool)
-            .await?;
-    Ok(stored
-        .and_then(
-            |value| match serde_json::from_value::<SnapshotSettings>(value) {
-                Ok(settings) if settings.is_valid() => Some(settings),
-                _ => {
-                    eprintln!("stored client settings are invalid, using defaults");
-                    None
-                }
-            },
-        )
-        .unwrap_or_default())
+async fn load_settings(pool: &PgPool) -> Result<(SnapshotSettings, SettingsMetadata), sqlx::Error> {
+    let stored = sqlx::query_as::<_, StoredSettings>(
+        "SELECT settings, version, updated_at, updated_by FROM public.client_settings WHERE id",
+    )
+    .fetch_optional(pool)
+    .await?;
+    let Some(stored) = stored else {
+        return Ok((SnapshotSettings::default(), SettingsMetadata::default()));
+    };
+    let settings = match serde_json::from_value::<SnapshotSettings>(stored.settings) {
+        Ok(settings) if settings.is_valid() => settings,
+        _ => {
+            eprintln!("stored client settings are invalid, using defaults");
+            SnapshotSettings::default()
+        }
+    };
+    Ok((
+        settings,
+        SettingsMetadata {
+            version: stored.version,
+            updated_at: Some(stored.updated_at),
+            updated_by: Some(stored.updated_by),
+        },
+    ))
 }
 
-async fn save_settings(pool: &PgPool, settings: &SnapshotSettings) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO public.client_settings (id, settings) VALUES (true, $1) \
-         ON CONFLICT (id) DO UPDATE SET settings = excluded.settings, updated_at = now()",
+async fn save_settings(
+    pool: &PgPool,
+    settings: &SnapshotSettings,
+    updated_by: &str,
+) -> Result<SettingsMetadata, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let metadata = sqlx::query_as::<_, SettingsMetadata>(
+        "INSERT INTO public.client_settings (id, settings, version, updated_by) \
+         VALUES (true, $1, 1, $2) \
+         ON CONFLICT (id) DO UPDATE SET settings = excluded.settings, \
+             version = public.client_settings.version + 1, updated_by = excluded.updated_by, \
+             updated_at = now() \
+         RETURNING version, updated_at, updated_by",
     )
     .bind(serde_json::to_value(settings).expect("settings always serialize"))
-    .execute(pool)
+    .bind(updated_by)
+    .fetch_one(&mut *transaction)
     .await?;
-    Ok(())
+    sqlx::query(
+        "INSERT INTO public.client_settings_history (version, settings, updated_at, updated_by) \
+         SELECT version, settings, updated_at, updated_by FROM public.client_settings WHERE id \
+         ON CONFLICT (version) DO NOTHING",
+    )
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(metadata)
+}
+
+fn set_settings_version(risks: &mut Risks, version: i64) {
+    for risk in risks.values_mut() {
+        risk.settings_version = version;
+    }
 }
 
 async fn last_log_id(pool: &PgPool) -> Result<Option<i64>, sqlx::Error> {
@@ -1249,6 +1357,7 @@ fn calculate_snapshot_risk(
         payment_coverage: client.payment_coverage,
         assessment_status,
         available_factors,
+        settings_version: 0,
     }
 }
 
@@ -1257,8 +1366,12 @@ async fn client_history(
     Path(id): Path<i64>,
 ) -> Result<Json<Vec<HistoryPoint>>, StatusCode> {
     let rows = sqlx::query_as::<_, HistoryPoint>(
-        "SELECT observed_on, assessment, features FROM public.client_snapshots \
-         WHERE account_id = $1 ORDER BY observed_on DESC LIMIT 365",
+        "SELECT snapshots.observed_on, snapshots.settings_version, \
+             NULLIF(history.settings->>'historicalMinDays', '')::bigint AS historical_min_days, \
+             snapshots.assessment, snapshots.features \
+         FROM public.client_snapshots snapshots \
+         LEFT JOIN public.client_settings_history history ON history.version = snapshots.settings_version \
+         WHERE snapshots.account_id = $1 ORDER BY snapshots.observed_on DESC LIMIT 365",
     )
     .bind(id)
     .fetch_all(&pool)
@@ -1443,9 +1556,25 @@ async fn monitored_prices(
                     t.plan_key, t.plan_name, t.cpu_cores::float8 AS cpu_cores,
                     t.ram_mib::float8 / 1024.0 AS ram_gib,
                     t.disk_gib::float8 AS disk_gib, t.disk_type, t.region,
+                    p.source_kind, p.effective_at, p.retrieved_at,
                     (p.observed_at AT TIME ZONE 'UTC')::date AS observed_on,
                     p.price_rub_minor::float8 / 100.0 AS price_rub,
                     lag(p.price_rub_minor::float8 / 100.0) OVER w AS previous_price_rub,
+                    CASE WHEN p.currency = 'USD' THEN p.price_minor::float8 / 100.0
+                         WHEN usd_fx.rate > 0 THEN p.price_rub_minor::float8 / 100.0 / usd_fx.rate::float8
+                         ELSE NULL END AS price_usd,
+                    lag(CASE WHEN p.currency = 'USD' THEN p.price_minor::float8 / 100.0
+                         WHEN usd_fx.rate > 0 THEN p.price_rub_minor::float8 / 100.0 / usd_fx.rate::float8
+                         ELSE NULL END) OVER w AS previous_price_usd,
+                    CASE WHEN p.currency = 'EUR' THEN p.price_minor::float8 / 100.0
+                         WHEN eur_fx.rate > 0 THEN p.price_rub_minor::float8 / 100.0 / eur_fx.rate::float8
+                         ELSE NULL END AS price_eur,
+                    lag(CASE WHEN p.currency = 'EUR' THEN p.price_minor::float8 / 100.0
+                         WHEN eur_fx.rate > 0 THEN p.price_rub_minor::float8 / 100.0 / eur_fx.rate::float8
+                         ELSE NULL END) OVER w AS previous_price_eur,
+                    p.rub_rate_on,
+                    usd_fx.rate::float8 AS usd_rub_rate, usd_fx.rate_on AS usd_rate_on,
+                    eur_fx.rate::float8 AS eur_rub_rate, eur_fx.rate_on AS eur_rate_on,
                     p.currency::text AS currency,
                     p.price_minor::float8 / 100.0 AS original_price,
                     p.billing_period, p.vat_included, p.price_kind,
@@ -1459,6 +1588,12 @@ async fn monitored_prices(
              FROM market_intelligence.tariff_prices_rub p
              JOIN market_intelligence.provider_tariffs t ON t.id = p.provider_tariff_id
              JOIN market_intelligence.providers ON providers.id = t.provider_id
+             LEFT JOIN market_intelligence.exchange_rates usd_fx
+               ON usd_fx.base = 'USD' AND usd_fx.quote = 'RUB'
+              AND usd_fx.requested_on = (p.observed_at AT TIME ZONE 'UTC')::date
+             LEFT JOIN market_intelligence.exchange_rates eur_fx
+               ON eur_fx.base = 'EUR' AND eur_fx.quote = 'RUB'
+              AND eur_fx.requested_on = (p.observed_at AT TIME ZONE 'UTC')::date
              WHERE p.parse_status = 'complete'
                AND p.billing_period = 'month'
                AND p.price_kind <> 'unavailable_or_waitlist'
@@ -1471,7 +1606,9 @@ async fn monitored_prices(
            ), provider_benchmarks AS (
              SELECT provider_code, cpu_cores, ram_gib, disk_gib, lower(disk_type) AS disk_key,
                     lower(region) AS region_key, vat_included, traffic_gib, traffic_unlimited,
-                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price_rub) AS provider_median_rub
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price_rub) AS provider_median_rub,
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price_usd) AS provider_median_usd,
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price_eur) AS provider_median_eur
              FROM latest
              WHERE provider_code <> 'aeza' AND price_rub IS NOT NULL
                AND disk_type IS NOT NULL AND region IS NOT NULL
@@ -1484,6 +1621,10 @@ async fn monitored_prices(
              SELECT cpu_cores, ram_gib, disk_gib, disk_key, region_key,
                     vat_included, traffic_gib, traffic_unlimited,
                     percentile_cont(0.5) WITHIN GROUP (ORDER BY provider_median_rub) AS market_median_rub,
+                    CASE WHEN count(provider_median_usd) >= 2
+                         THEN percentile_cont(0.5) WITHIN GROUP (ORDER BY provider_median_usd) END AS market_median_usd,
+                    CASE WHEN count(provider_median_eur) >= 2
+                         THEN percentile_cont(0.5) WITHIN GROUP (ORDER BY provider_median_eur) END AS market_median_eur,
                     count(*)::bigint AS providers_at_median
              FROM provider_benchmarks
              GROUP BY cpu_cores, ram_gib, disk_gib, disk_key, region_key,
@@ -1492,13 +1633,25 @@ async fn monitored_prices(
            )
            SELECT latest.provider_code, latest.provider, latest.plan_key, latest.plan_name,
                   latest.cpu_cores, latest.ram_gib,
-                  latest.disk_gib, latest.disk_type, latest.region, latest.observed_on,
+                  latest.disk_gib, latest.disk_type, latest.region, latest.source_kind,
+                  latest.observed_on, latest.effective_at, latest.retrieved_at,
                   latest.price_rub,
                   latest.previous_price_rub,
+                  latest.price_usd, latest.previous_price_usd,
+                  latest.price_eur, latest.previous_price_eur,
+                  latest.rub_rate_on, latest.usd_rub_rate, latest.usd_rate_on,
+                  latest.eur_rub_rate, latest.eur_rate_on,
                   CASE WHEN latest.previous_price_rub > 0
                        THEN (latest.price_rub / latest.previous_price_rub - 1.0) * 100.0
                        ELSE NULL END AS change_percent,
+                  CASE WHEN latest.previous_price_usd > 0
+                       THEN (latest.price_usd / latest.previous_price_usd - 1.0) * 100.0
+                       ELSE NULL END AS change_percent_usd,
+                  CASE WHEN latest.previous_price_eur > 0
+                       THEN (latest.price_eur / latest.previous_price_eur - 1.0) * 100.0
+                       ELSE NULL END AS change_percent_eur,
                   latest.history_points, benchmarks.market_median_rub,
+                  benchmarks.market_median_usd, benchmarks.market_median_eur,
                   coalesce(benchmarks.providers_at_median, 0)::bigint AS providers_at_median,
                   latest.currency, latest.original_price,
                   latest.billing_period, latest.vat_included, latest.traffic_gib,
@@ -1534,10 +1687,24 @@ async fn price_history(
                   t.ram_mib::float8 / 1024.0 AS ram_gib,
                   t.disk_gib::float8 AS disk_gib, t.disk_type, t.region,
                   (p.observed_at AT TIME ZONE 'UTC')::date AS observed_on,
-                  p.price_rub_minor::float8 / 100.0 AS price_rub
+                  p.price_rub_minor::float8 / 100.0 AS price_rub,
+                  CASE WHEN p.currency = 'USD' THEN p.price_minor::float8 / 100.0
+                       WHEN usd_fx.rate > 0 THEN p.price_rub_minor::float8 / 100.0 / usd_fx.rate::float8
+                       ELSE NULL END AS price_usd,
+                  CASE WHEN p.currency = 'EUR' THEN p.price_minor::float8 / 100.0
+                       WHEN eur_fx.rate > 0 THEN p.price_rub_minor::float8 / 100.0 / eur_fx.rate::float8
+                       ELSE NULL END AS price_eur,
+                  usd_fx.rate::float8 AS usd_rub_rate, usd_fx.rate_on AS usd_rate_on,
+                  eur_fx.rate::float8 AS eur_rub_rate, eur_fx.rate_on AS eur_rate_on
            FROM market_intelligence.tariff_prices_rub p
            JOIN market_intelligence.provider_tariffs t ON t.id = p.provider_tariff_id
            JOIN market_intelligence.providers ON providers.id = t.provider_id
+           LEFT JOIN market_intelligence.exchange_rates usd_fx
+             ON usd_fx.base = 'USD' AND usd_fx.quote = 'RUB'
+            AND usd_fx.requested_on = (p.observed_at AT TIME ZONE 'UTC')::date
+           LEFT JOIN market_intelligence.exchange_rates eur_fx
+             ON eur_fx.base = 'EUR' AND eur_fx.quote = 'RUB'
+            AND eur_fx.requested_on = (p.observed_at AT TIME ZONE 'UTC')::date
            WHERE p.parse_status = 'complete' AND p.billing_period = 'month'
              AND p.price_kind <> 'unavailable_or_waitlist'
              AND p.price_rub_minor IS NOT NULL
@@ -1577,11 +1744,23 @@ async fn price_benchmark_history(
                     price.vat_included,
                     (tariff.attributes #>> '{normalized_details,traffic_gib}')::bigint AS traffic_gib,
                     (tariff.attributes #>> '{normalized_details,traffic_unlimited}')::boolean AS traffic_unlimited,
-                    price.price_rub_minor::float8 / 100.0 AS price_rub
+                    price.price_rub_minor::float8 / 100.0 AS price_rub,
+                    CASE WHEN price.currency = 'USD' THEN price.price_minor::float8 / 100.0
+                         WHEN usd_fx.rate > 0 THEN price.price_rub_minor::float8 / 100.0 / usd_fx.rate::float8
+                         ELSE NULL END AS price_usd,
+                    CASE WHEN price.currency = 'EUR' THEN price.price_minor::float8 / 100.0
+                         WHEN eur_fx.rate > 0 THEN price.price_rub_minor::float8 / 100.0 / eur_fx.rate::float8
+                         ELSE NULL END AS price_eur
              FROM market_intelligence.tariff_prices_rub price
              JOIN market_intelligence.provider_tariffs tariff
                ON tariff.id = price.provider_tariff_id
              JOIN market_intelligence.providers provider ON provider.id = tariff.provider_id
+             LEFT JOIN market_intelligence.exchange_rates usd_fx
+               ON usd_fx.base = 'USD' AND usd_fx.quote = 'RUB'
+              AND usd_fx.requested_on = (price.observed_at AT TIME ZONE 'UTC')::date
+             LEFT JOIN market_intelligence.exchange_rates eur_fx
+               ON eur_fx.base = 'EUR' AND eur_fx.quote = 'RUB'
+              AND eur_fx.requested_on = (price.observed_at AT TIME ZONE 'UTC')::date
              WHERE price.parse_status = 'complete'
                AND price.billing_period = 'month'
                AND price.price_kind IN ('regular', 'listed_monthly', 'official_catalog')
@@ -1598,7 +1777,9 @@ async fn price_benchmark_history(
            ), provider_medians AS (
              SELECT month_start, provider_code, cpu_cores, ram_gib, disk_gib,
                     disk_key, region_key, vat_included, traffic_gib, traffic_unlimited,
-                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price_rub) AS provider_median_rub
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price_rub) AS provider_median_rub,
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price_usd) AS provider_median_usd,
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price_eur) AS provider_median_eur
              FROM monthly
              WHERE provider_code <> 'aeza'
              GROUP BY month_start, provider_code, cpu_cores, ram_gib, disk_gib,
@@ -1607,8 +1788,16 @@ async fn price_benchmark_history(
              SELECT month_start, cpu_cores, ram_gib, disk_gib, disk_key, region_key,
                     vat_included, traffic_gib, traffic_unlimited,
                     percentile_cont(0.5) WITHIN GROUP (ORDER BY provider_median_rub) AS median_rub,
+                    CASE WHEN count(provider_median_usd) >= 2
+                         THEN percentile_cont(0.5) WITHIN GROUP (ORDER BY provider_median_usd) END AS median_usd,
+                    CASE WHEN count(provider_median_eur) >= 2
+                         THEN percentile_cont(0.5) WITHIN GROUP (ORDER BY provider_median_eur) END AS median_eur,
                     min(provider_median_rub) AS min_provider_median_rub,
                     max(provider_median_rub) AS max_provider_median_rub,
+                    min(provider_median_usd) AS min_provider_median_usd,
+                    max(provider_median_usd) AS max_provider_median_usd,
+                    min(provider_median_eur) AS min_provider_median_eur,
+                    max(provider_median_eur) AS max_provider_median_eur,
                     count(DISTINCT provider_code)::bigint AS provider_count
              FROM provider_medians
              GROUP BY month_start, cpu_cores, ram_gib, disk_gib, disk_key, region_key,
@@ -1617,10 +1806,20 @@ async fn price_benchmark_history(
            )
            SELECT own.month_start, own.plan_key, own.plan_name,
                   own.cpu_cores, own.ram_gib, own.disk_gib, own.disk_type, own.region,
-                  own.price_rub, market.median_rub AS market_median_rub,
-                  market.min_provider_median_rub, market.max_provider_median_rub,
+                  own.price_rub, own.price_usd, own.price_eur,
+                  market.median_rub AS market_median_rub,
+                  market.median_usd AS market_median_usd,
+                  market.median_eur AS market_median_eur,
+                  market.min_provider_median_rub AS provider_median_min_rub,
+                  market.max_provider_median_rub AS provider_median_max_rub,
+                  market.min_provider_median_usd AS provider_median_min_usd,
+                  market.max_provider_median_usd AS provider_median_max_usd,
+                  market.min_provider_median_eur AS provider_median_min_eur,
+                  market.max_provider_median_eur AS provider_median_max_eur,
                   market.provider_count AS providers_at_median,
-                  (own.price_rub / nullif(market.median_rub, 0) - 1.0) * 100.0 AS gap_percent
+                  (own.price_rub / nullif(market.median_rub, 0) - 1.0) * 100.0 AS gap_percent,
+                  (own.price_usd / nullif(market.median_usd, 0) - 1.0) * 100.0 AS gap_percent_usd,
+                  (own.price_eur / nullif(market.median_eur, 0) - 1.0) * 100.0 AS gap_percent_eur
            FROM monthly own
            JOIN market USING (month_start, cpu_cores, ram_gib, disk_gib,
                               disk_key, region_key, vat_included,
@@ -1736,6 +1935,55 @@ mod tests {
         let json = serde_json::to_value(&risk).unwrap();
         assert_eq!(json["upcomingCents"], 1000);
         assert_eq!(json["accountId"], "1");
+        assert_eq!(json["settingsVersion"], 0);
+    }
+
+    #[test]
+    fn new_weights_and_thresholds_change_the_risk_result() {
+        let client = ClientFeatures {
+            account_id: 1,
+            email: "fixture@example.test".into(),
+            services_count: 1,
+            monthly_spend: 1000.0,
+            short_term_share: Some(0.0),
+            no_auto_prolong_share: Some(1.0),
+            prolong_wait_share: Some(0.0),
+            failed_prolong_share: None,
+            expiring_revenue_share: Some(0.0),
+            upcoming_payments: 1000,
+            spendable_balance: 1000,
+            payment_coverage: Some(1.0),
+        };
+        let baseline = SnapshotSettings::default();
+        let baseline_risk = calculate_snapshot_risk(&client, 0, &baseline);
+        assert_eq!(baseline_risk.score, 17);
+        assert_eq!(baseline_risk.level, "low");
+
+        let thresholded = SnapshotSettings {
+            medium_threshold: 10,
+            high_threshold: 20,
+            ..SnapshotSettings::default()
+        };
+        let thresholded_risk = calculate_snapshot_risk(&client, 0, &thresholded);
+        assert_eq!(thresholded_risk.score, baseline_risk.score);
+        assert_eq!(thresholded_risk.level, "medium");
+
+        let weighted = SnapshotSettings {
+            weights: SnapshotWeights {
+                payment_coverage: 0.0,
+                no_auto_prolong: 100.0,
+                prolong_wait: 0.0,
+                failed_prolong: 0.0,
+                expiring_revenue: 0.0,
+            },
+            medium_threshold: 20,
+            high_threshold: 80,
+            renewal_window_days: 14,
+            historical_min_days: 30,
+        };
+        let weighted_risk = calculate_snapshot_risk(&client, 0, &weighted);
+        assert_eq!(weighted_risk.score, 100);
+        assert_eq!(weighted_risk.level, "high");
     }
 
     #[test]
@@ -1747,9 +1995,22 @@ mod tests {
         } = message;
         assert_eq!(request_id, "7");
         assert!(settings.is_valid());
-        let ack: serde_json::Value =
-            serde_json::from_str(encode(&ServerMessage::Ack { request_id: "7" }).as_str()).unwrap();
-        assert_eq!(ack, serde_json::json!({"type": "ack", "requestId": "7"}));
+        let metadata = SettingsMetadata::default();
+        let ack: serde_json::Value = serde_json::from_str(
+            encode(&ServerMessage::Ack {
+                request_id: "7",
+                settings_metadata: &metadata,
+            })
+            .as_str(),
+        )
+        .unwrap();
+        assert_eq!(
+            ack,
+            serde_json::json!({
+                "type": "ack", "requestId": "7",
+                "settingsMetadata": {"version": 0, "updatedAt": null, "updatedBy": null}
+            })
+        );
         let defaults = serde_json::to_value(SnapshotSettings::default()).unwrap();
         assert_eq!(defaults["weights"]["paymentCoverage"], 35.0);
         assert_eq!(defaults["historicalMinDays"], 30);

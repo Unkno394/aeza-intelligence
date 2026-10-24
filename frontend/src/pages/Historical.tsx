@@ -4,7 +4,7 @@ import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Too
 import { ArrowUpRight, CalendarDays, ChevronDown, CircleAlert, Clock3, History, Info } from 'lucide-react';
 import { useAnalyzer } from '../hooks/useAnalyzer';
 import { Empty, Panel } from '../components/common';
-import { GlassSelect } from '../components/ui/GlassSelect';
+import { AccountPicker } from '../components/ui/AccountPicker';
 import './historical.css';
 
 type MetricDeviation = {
@@ -65,6 +65,8 @@ type AnomalyReason = {
   explanation: string;
 };
 type Assessment = {
+  snapshot_risk_score?: number;
+  synthetic_replay?: boolean;
   familiarity: number;
   event_familiarity: number;
   is_confident: boolean;
@@ -78,7 +80,7 @@ type Assessment = {
   personal_sequence_deviations?: PersonalSequence[];
   anomaly_reasons?: AnomalyReason[];
 };
-type HistoryPoint = { observedOn: string; assessment: Assessment; features: Record<string, number> };
+type HistoryPoint = { observedOn: string; settingsVersion?: number; historicalMinDays?: number | null; assessment: Assessment; features: Record<string, number> };
 type SequencePeer = { accountId: number; similarity: number; sequence: string[] };
 type DiscoveredPattern = { sequence: string[]; support: number; supportRatio: number; clientIds: number[] };
 type TransitionEntry = Transition & { observedOn: string };
@@ -156,7 +158,7 @@ export default function Historical() {
       .then(setSequencePeers)
       .catch(() => { if (!controller.signal.aborted) setSequencePeers([]); });
     return () => controller.abort();
-  }, [account?.id]);
+  }, [account?.id, data?.asOf]);
 
   const latest = points.at(-1);
   const chartPoints = useMemo(() => {
@@ -165,7 +167,7 @@ export default function Historical() {
       .map(point => {
         const metricScores = Object.values(point.assessment.metric_deviations ?? {}).map(item => item.score).filter((value): value is number => value != null);
         const transitionScores = transitionList(point).map(item => item.elapsed_z_score).filter((value): value is number => value != null);
-        return { date: point.observedOn, anomaly: Math.max(0, ...metricScores, ...transitionScores) };
+        return { date: point.observedOn, anomaly: Math.max(0, ...metricScores, ...transitionScores), riskScore: point.assessment.synthetic_replay ? point.assessment.snapshot_risk_score : undefined };
       });
   }, [points, latest, period]);
   const selectedPoint = chartPoints.length
@@ -238,7 +240,7 @@ export default function Historical() {
   return <div className="historical-page">
     <div className="page-heading historical-heading">
       <div><div className="eyebrow">ПОВЕДЕНЧЕСКАЯ АНАЛИТИКА</div><h1>Historical Model</h1><p>Что изменилось у клиента, насколько это необычно и что стоит проверить.</p></div>
-      <label className="client-select">Клиент<GlassSelect value={account.id} onChange={value => setParams({ client: value })} options={data.accounts.map(item => ({ value: item.id, label: item.name + ' · ' + item.id }))} /></label>
+      <AccountPicker accounts={data.accounts} value={account.id} onChange={value => setParams(current => { const next = new URLSearchParams(current); next.set('client', value); return next; })} />
     </div>
 
     <section className="historical-summary" aria-label="Сводка истории клиента">
@@ -258,12 +260,14 @@ export default function Historical() {
           <CartesianGrid stroke="#a9dfff18" vertical={false} />
           <XAxis dataKey="date" tickFormatter={(value: string) => compactDate(value)} minTickGap={24} tick={{ fill: '#8eabc0', fontSize: 10 }} axisLine={{ stroke: '#a9dfff22' }} tickLine={false} />
           <YAxis domain={[0, (dataMax: number) => Math.max(dataMax, 3.5)]} tick={{ fill: '#8eabc0', fontSize: 10 }} axisLine={false} tickLine={false} width={38} />
-          <Tooltip labelFormatter={value => calendarDate(String(value))} formatter={value => [Number(value).toFixed(1) + 'σ', 'Отклонение числового профиля']} contentStyle={{ background: '#10283d', border: '1px solid #6ab9e533', borderRadius: 9, color: '#e4f4ff' }} />
+          <Tooltip labelFormatter={value => { const point = points.find(item => item.observedOn === String(value)); return `${calendarDate(String(value))} · ${point?.settingsVersion ? `конфигурация v${point.settingsVersion}` : 'старая конфигурация'}`; }} formatter={value => [Number(value).toFixed(1) + 'σ', 'Отклонение числового профиля']} contentStyle={{ background: '#10283d', border: '1px solid #6ab9e533', borderRadius: 9, color: '#e4f4ff' }} />
           <ReferenceLine y={3} stroke="#ff7778" strokeDasharray="5 5" label={{ value: 'Порог 3σ', position: 'insideTopRight', fill: '#ff8b8d', fontSize: 10 }} />
           {selectedPoint && <ReferenceLine x={selectedPoint.observedOn} stroke="#7bc8f0" strokeDasharray="3 4" />}
           <Line type="monotone" dataKey="anomaly" name="Аномальность" stroke="#67cefb" strokeWidth={2.4} dot={{ r: 3, fill: '#10283d', stroke: '#67cefb', strokeWidth: 2, cursor: 'pointer' }} activeDot={{ r: 6, fill: '#c4eeff', stroke: '#42b9f0', strokeWidth: 2 }} />
         </LineChart></ResponsiveContainer></div>
-        {selectedPoint && <div className="historical-selected-point"><div className="historical-selected-heading"><div><small>Выбранная дата</small><strong>{calendarDate(selectedPoint.observedOn)}</strong></div><b className={selectedAssessment?.is_unusual ? 'is-unusual' : ''}>Числовое отклонение {sigma(selectedChartScore)} · {selectedAssessment?.is_unusual ? 'есть сигналы' : 'без выраженного отклонения'}</b></div>
+        {chartPoints.some(point => point.riskScore != null) && <div className="historical-replay-strip"><small>Сценарный Risk Score · синтетические данные</small><div className="historical-replay-bars">{chartPoints.map(point => <button key={point.date} type="button" title={`${calendarDate(point.date)}: ${point.riskScore ?? 'нет оценки'} / 100`} aria-label={`${calendarDate(point.date)}: сценарный Risk Score ${point.riskScore ?? 'нет оценки'} из 100`} className={point.date === selectedPoint?.observedOn ? 'selected' : ''} style={{height: `${Math.max(6, point.riskScore ?? 0)}%`}} onClick={() => setSelectedDate(point.date)} />)}</div></div>}
+        {selectedPoint && <div className="historical-selected-point"><div className="historical-selected-heading"><div><small>Выбранная дата</small><strong>{calendarDate(selectedPoint.observedOn)}</strong><small>Конфигурация {selectedPoint.settingsVersion ? `v${selectedPoint.settingsVersion}` : 'до версионирования'} · минимум истории: {selectedPoint.historicalMinDays ? `${selectedPoint.historicalMinDays} дней` : 'не записан'}</small></div><b className={selectedAssessment?.is_unusual ? 'is-unusual' : ''}>Числовое отклонение {sigma(selectedChartScore)} · {selectedAssessment?.is_unusual ? 'есть сигналы' : 'без выраженного отклонения'}</b></div>
+          {selectedAssessment?.synthetic_replay && <p>Сценарный Risk Score: <strong>{selectedAssessment.snapshot_risk_score ?? '—'} / 100</strong>. Рассчитан по виртуальным признакам и коэффициентам конфигурации v{selectedPoint.settingsVersion}; это тестовый результат.</p>}
           {selectedReasons.length ? <div className="historical-point-reasons">{selectedReasons.slice(0, 4).map((reason, index) => <div key={reason.kind + reason.subject + index}><strong>{metricNames[reason.subject] ?? reason.subject}</strong><span>{reason.kind === 'feature' ? featureValue(reason.subject, reason.observed) + ' при личной норме ' + featureValue(reason.subject, reason.baseline) : reason.kind === 'pending_state' ? 'Ожидание ' + (reason.observed == null ? '—' : duration(reason.observed)) + ' · обычно ' + (reason.baseline == null ? '—' : duration(reason.baseline)) : reason.subject}</span></div>)}</div> : <p>Для выбранной даты модель не отметила отдельных сигналов.</p>}
           <small>Отклонение и редкость помогают выбрать, что проверить; сами по себе они не доказывают причину поведения.</small>
         </div>}

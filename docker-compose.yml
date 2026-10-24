@@ -23,6 +23,19 @@ x-app: &app
       condition: service_completed_successfully
 
 services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1
+    network_mode: host
+    command: ["start-dev", "--http-port=8081", "--hostname=http://127.0.0.1:8081", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
+      SSO_USER_PASSWORD: ${SSO_USER_PASSWORD:?Set SSO_USER_PASSWORD in .env}
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      - ./keycloak/aeza-realm.json:/opt/keycloak/data/import/aeza-realm.json:ro
+    restart: unless-stopped
+
   migrate:
     <<: *app
     command: ["migrate"]
@@ -44,19 +57,40 @@ services:
     # AUTH_DISABLED=true.
     environment:
       DATABASE_URL: *database-url
-      OIDC_ISSUER: ${OIDC_ISSUER:-}
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://127.0.0.1:8081/realms/aeza}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-aeza-intelligence}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
       PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:${FRONTEND_PORT:-8080}}
       SESSION_HOURS: ${SESSION_HOURS:-12}
       AUTH_DISABLED: ${AUTH_DISABLED:-false}
+      LOCAL_ADMIN_USER: ${LOCAL_ADMIN_USER:-}
+      LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-}
+    depends_on:
+      keycloak:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
 
   snapshots:
     <<: *app
     restart: unless-stopped
     entrypoint: ["client_snapshot"]
     command: ["--schedule"]
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+  demo-stream:
+    <<: *app
+    profiles: ["demo"]
+    restart: unless-stopped
+    entrypoint: ["demo_stream"]
+    environment:
+      DATABASE_URL: *database-url
+      DEMO_STREAM_INTERVAL_SECONDS: ${DEMO_STREAM_INTERVAL_SECONDS:-15}
+      DEMO_REPLAY_DAYS: ${DEMO_REPLAY_DAYS:-60}
+      DEMO_REPLAY_DELAY_MS: ${DEMO_REPLAY_DELAY_MS:-200}
     depends_on:
       seed:
         condition: service_completed_successfully
@@ -109,3 +143,6 @@ services:
     depends_on:
       - api
       - simulator
+
+volumes:
+  keycloak-data:

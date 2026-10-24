@@ -15,7 +15,22 @@ pub struct Point {
     pub exact_profit_rub: String,
     pub revenue_rub: f64,
     pub final_active: usize,
+    pub renewal_events: usize,
+    pub competitor_switch_out_events: usize,
+    pub outside_churn_events: usize,
     pub loss_events: usize,
+    pub segments: Vec<SegmentPoint>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct SegmentPoint {
+    pub segment_index: usize,
+    pub segment: String,
+    pub modeled_decisions: usize,
+    pub purchases: usize,
+    pub renewals: usize,
+    pub loss_events: usize,
+    pub final_active: usize,
+    pub revenue_rub: f64,
 }
 #[derive(Debug, Serialize)]
 pub struct Distribution {
@@ -157,12 +172,29 @@ pub fn analyze(s: Scenario, market: Vec<Plan>) -> Result<Statistics, String> {
             let value = signed_money(exact);
             seed_profit.push(value);
             profits[i].push(value);
+            let segments=s.segments.iter().enumerate().map(|(segment_index,segment)|{
+                let rows:Vec<_>=run.months.iter().flat_map(|month|&month.buyer_behavior).filter(|row|row.segment_index==segment_index).collect();
+                let final_active=run.months.last().unwrap().buyer_behavior.iter().find(|row|row.segment_index==segment_index).map_or(0,|row|row.aeza_active);
+                SegmentPoint{
+                    segment_index,
+                    segment:segment.name.clone(),
+                    modeled_decisions:rows.iter().map(|row|row.decisions).sum(),
+                    purchases:rows.iter().map(|row|row.first_leases+row.market_returns+row.switches_in).sum(),
+                    renewals:rows.iter().map(|row|row.renewals).sum(),
+                    loss_events:rows.iter().map(|row|row.switches_out+row.exogenous_exits+row.choice_exits).sum(),
+                    final_active,
+                    revenue_rub:rows.iter().map(|row|row.aeza_revenue_rub).sum(),
+                }
+            }).collect();
             points[i].push(Point {
                 seed,
                 profit_rub: money::float(value),
                 exact_profit_rub: exact.clone(),
                 revenue_rub: run.aeza_total_revenue_usd,
                 final_active: run.months.last().unwrap().providers["aeza"].active_leases,
+                renewal_events: run.months.iter().map(|m| m.providers["aeza"].renewals).sum(),
+                competitor_switch_out_events: run.months.iter().map(|m| m.providers["aeza"].switches_out).sum(),
+                outside_churn_events: run.months.iter().map(|m| m.providers["aeza"].churn_to_outside).sum(),
                 loss_events: run
                     .months
                     .iter()
@@ -170,6 +202,7 @@ pub fn analyze(s: Scenario, market: Vec<Plan>) -> Result<Statistics, String> {
                         m.providers["aeza"].churn_to_outside + m.providers["aeza"].switches_out
                     })
                     .sum(),
+                segments,
             });
         }
         let best = *seed_profit.iter().max().unwrap();
@@ -211,7 +244,7 @@ pub fn analyze(s: Scenario, market: Vec<Plan>) -> Result<Statistics, String> {
     let replay_sha256 = hash(
         &serde_json::to_vec(&(
             VERSION,
-            "statistics-v1",
+            "statistics-v2",
             &s,
             &catalog_sha256,
             (0..SEED_COUNT as u64).collect::<Vec<_>>(),
