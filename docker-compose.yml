@@ -27,7 +27,7 @@ services:
     <<: *app
     command: ["migrate"]
     depends_on: []
-    restart: on-failure
+    restart: "on-failure:5"
 
   seed:
     <<: *app
@@ -69,7 +69,7 @@ services:
 
   trends:
     <<: *app
-    restart: on-failure
+    restart: "on-failure:5"
     entrypoint: ["sh", "-c"]
     command:
       - |
