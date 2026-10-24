@@ -1,3 +1,5 @@
+mod auth;
+
 use std::{
     collections::BTreeMap,
     net::SocketAddr,
@@ -14,12 +16,13 @@ use aeza_intelligence::{
 };
 use anyhow::Result;
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{
         FromRef, Path, State,
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
+    middleware,
     response::Response,
     routing::{get, post},
 };
@@ -28,6 +31,8 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use tokio::sync::{Mutex, broadcast};
+
+use crate::auth::{Admin, Auth, AuthArgs, Session};
 
 /// How often the live channel checks operation_logs for client data changes.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -42,6 +47,8 @@ struct Cli {
     database_url: String,
     #[arg(long, default_value = "127.0.0.1:3000")]
     listen: SocketAddr,
+    #[command(flatten)]
+    auth: AuthArgs,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -361,7 +368,10 @@ async fn main() -> Result<()> {
         .connect(&cli.database_url)
         .await?;
     PgAdapter::from_pool(pool.clone()).migrate().await?;
+    let auth = Auth::new(cli.auth).await?;
     let live = Live::start(pool.clone()).await?;
+    let state = AppState { pool, live, auth };
+    // Every route added before route_layer requires a session.
     let app = Router::new()
         .route("/api/market/search-interest", get(search_interest))
         .route(
@@ -393,7 +403,15 @@ async fn main() -> Result<()> {
             get(discovered_sequence_patterns),
         )
         .route("/api/client/ws", get(live_socket))
-        .with_state(AppState { pool, live });
+        .route("/api/auth/me", get(auth::me))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_admin,
+        ))
+        .route("/api/auth/login", get(auth::login))
+        .route("/api/auth/callback", get(auth::callback))
+        .route("/api/auth/logout", post(auth::logout))
+        .with_state(state);
     let listener = tokio::net::TcpListener::bind(cli.listen).await?;
     eprintln!("market API listening on http://{}", cli.listen);
     axum::serve(listener, app).await?;
@@ -404,6 +422,13 @@ async fn main() -> Result<()> {
 struct AppState {
     pool: PgPool,
     live: Arc<Live>,
+    auth: Arc<Auth>,
+}
+
+impl FromRef<AppState> for Arc<Auth> {
+    fn from_ref(state: &AppState) -> Self {
+        state.auth.clone()
+    }
 }
 
 impl FromRef<AppState> for PgPool {
@@ -600,8 +625,14 @@ impl Live {
         })
     }
 
-    async fn handle(&self, pool: &PgPool, text: &str) -> Utf8Bytes {
+    async fn handle(&self, pool: &PgPool, admin: &Admin, text: &str) -> Utf8Bytes {
         match serde_json::from_str::<ClientMessage>(text) {
+            Ok(ClientMessage::UpdateSettings { request_id, .. }) if !admin.can_edit_settings() => {
+                encode(&ServerMessage::Error {
+                    request_id: Some(&request_id),
+                    message: "Недостаточно прав для изменения настроек",
+                })
+            }
             Ok(ClientMessage::UpdateSettings {
                 request_id,
                 settings,
@@ -627,11 +658,15 @@ impl Live {
     }
 }
 
-async fn live_socket(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    ws.on_upgrade(move |socket| serve_socket(socket, state))
+async fn live_socket(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Extension(session): Extension<Session>,
+) -> Response {
+    ws.on_upgrade(move |socket| serve_socket(socket, state, session))
 }
 
-async fn serve_socket(mut socket: WebSocket, state: AppState) {
+async fn serve_socket(mut socket: WebSocket, state: AppState, session: Session) {
     // Subscribe before taking the snapshot so no change falls between them.
     let mut events = state.live.events.subscribe();
     if socket
@@ -651,12 +686,19 @@ async fn serve_socket(mut socket: WebSocket, state: AppState) {
                 Err(broadcast::error::RecvError::Closed) => break,
             },
             incoming = socket.recv() => match incoming {
-                Some(Ok(Message::Text(text))) => state.live.handle(&state.pool, &text).await,
+                Some(Ok(Message::Text(text))) => {
+                    state.live.handle(&state.pool, &session.admin, &text).await
+                }
                 Some(Err(_)) | None => break,
                 // The close reply is sent by the next read, which then returns None.
                 Some(Ok(_)) => continue,
             },
             _ = ping.tick() => {
+                // Logout, expiry or deactivation also ends open connections.
+                if !state.auth.is_live(&state.pool, &session).await {
+                    let _ = socket.send(Message::Close(None)).await;
+                    break;
+                }
                 if socket.send(Message::Ping(Default::default())).await.is_err() {
                     break;
                 }
@@ -1378,7 +1420,7 @@ async fn tariff_client_cohorts(
 async fn price_behavior(
     State(pool): State<PgPool>,
 ) -> Result<Json<Vec<PriceBehaviorRow>>, StatusCode> {
-    let rows = sqlx::query_as::<_, PriceBehaviorRow>(include_str!("../sql/price_behavior.sql"))
+    let rows = sqlx::query_as::<_, PriceBehaviorRow>(include_str!("../../sql/price_behavior.sql"))
         .fetch_all(&pool)
         .await
         .map_err(|error| {

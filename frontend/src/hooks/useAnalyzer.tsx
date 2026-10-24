@@ -1,4 +1,5 @@
 import {createContext,useContext,useEffect,useRef,useState,type ReactNode} from 'react';
+import {useAuth} from './useAuth';
 import {LiveClient,liveUrl,type AccountRisk,type LiveStatus} from '../services/live';
 import type {Dataset,RiskResult,Settings} from '../types';
 interface State {data:Dataset|null;settings:Settings|null;risks:Record<string,RiskResult>|null;connection:LiveStatus;loading:boolean;error:string;reload:()=>void;saveSettings:(s:Settings)=>Promise<void>;saveData:(d:Dataset)=>Promise<void>}
@@ -8,6 +9,7 @@ export function AnalyzerProvider({children}:{children:ReactNode}) {
  const [data,setData]=useState<Dataset|null>(null),[settings,setSettings]=useState<Settings|null>(null),[risks,setRisks]=useState<Record<string,RiskResult>|null>(null);
  const [connection,setConnection]=useState<LiveStatus>('connecting'),[error,setError]=useState('');
  const client=useRef<LiveClient|null>(null),received=useRef(false);
+ const {recheck}=useAuth();
  useEffect(()=>{
   const live=new LiveClient(liveUrl('/api/client/ws'),message=>{switch(message.type){
    case 'snapshot':received.current=true;setData(message.dataset);setSettings(message.settings);setRisks(byAccount(message.risks));setError('');break;
@@ -15,7 +17,9 @@ export function AnalyzerProvider({children}:{children:ReactNode}) {
    case 'settings':setSettings(message.settings);break;
    case 'scores':setRisks(current=>{const next={...current};for(const id of message.removed)delete next[id];return {...next,...byAccount(message.changed)};});break;
    case 'error':console.error('Live API:',message.message);break;
-  }},status=>{setConnection(status);if(status==='closed'&&!received.current)setError('Нет соединения с сервером (WebSocket /api/client/ws)');});
+  }},status=>{setConnection(status);// A closed channel may mean the session ended: the gate then shows the login screen.
+   if(status==='closed')void recheck();
+   if(status==='closed'&&!received.current)setError('Нет соединения с сервером (WebSocket /api/client/ws)');});
   client.current=live;live.start();
   return ()=>{live.stop();client.current=null;};
  },[]);

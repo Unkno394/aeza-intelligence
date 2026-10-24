@@ -9,7 +9,8 @@ payment behavior. No training data is required before the first observation.
 
 ```sh
 cp .env.example .env
-# Set DATABASE_URL in .env to the existing PostgreSQL on this host.
+# Set DATABASE_URL in .env to the existing PostgreSQL on this host,
+# and the OIDC_* variables (see Authentication below).
 docker compose up -d --build
 ```
 
@@ -21,6 +22,39 @@ only when `TRENDSMCP_API_KEY` is set in `.env`; the Market Intelligence map
 includes a Google Trends regional CSV for the map. Ports and credentials
 can be overridden in `.env` (see `.env.example`). `docker compose down` stops
 the application containers; the existing database remains in place.
+
+### Authentication
+
+The web UI and every `/api` route, including the `/api/client/ws` WebSocket and
+the Market Simulator behind the frontend proxy, require a session. Sign-in uses
+OpenID Connect (Authorization Code + PKCE) with any provider that publishes
+`/.well-known/openid-configuration`:
+
+1. Register a client at the provider with redirect URI
+   `<PUBLIC_URL>/api/auth/callback` and post-logout redirect URI `<PUBLIC_URL>/`.
+2. Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (empty for a public
+   client) and, if users do not open `http://127.0.0.1:8080`, `PUBLIC_URL` in
+   `.env`. Open the UI only at `PUBLIC_URL`: cookies and the WebSocket origin
+   check are bound to it.
+3. Add the users to `public.admins`. The provider only proves the email
+   (`email_verified` must not be false); access is granted to an active row with
+   that email, case-insensitively:
+
+   ```sql
+   INSERT INTO public.admins (email, name, role)
+   VALUES ('analyst@example.com', 'Analyst', 'viewer');
+   ```
+
+   `viewer` reads everything; `operator` and `superadmin` may also change the
+   Risk Score settings. Setting `"isActive"` to false ends that admin's
+   sessions on their next request, and open WebSockets within 30 seconds.
+
+Sessions last `SESSION_HOURS` (12 by default) in an HttpOnly, SameSite=Lax
+cookie (`Secure` when `PUBLIC_URL` is https); `public.admin_sessions` stores
+only SHA-256 hashes of the tokens. `market_api` refuses to start without the
+OIDC settings. For local development and the `scripts/check_*` scripts, which
+call the API directly, start it with `AUTH_DISABLED=true`: every request then
+acts as a superadmin, so never use it on a reachable host.
 
 ## Inputs
 
@@ -148,7 +182,7 @@ the migration to stop with an explicit error for inspection.
 
 Outside Docker, start the API with `cargo run --bin market_api`. It listens on
 `127.0.0.1:3000`; the Vite frontend proxies `/api` there. The API serves
-`/api/client/ws`, `/api/client/dataset`, `POST /api/client/snapshot`,
+`/api/auth/{login,callback,me,logout}`, `/api/client/ws`, `/api/client/dataset`, `POST /api/client/snapshot`,
 `/api/client/analysis`,
 `/api/client/historical/{id}`, `/api/client/historical/{id}/sequence-peers`,
 `/api/client/historical/patterns`,
@@ -156,8 +190,9 @@ and the three `/api/market/*` routes.
 For a one-time snapshot run, use `cargo run --bin client_snapshot` after
 loading `.env`. Run `bash scripts/check_api.sh` to print response counts.
 Client data is read-only in the frontend; Risk Score settings are stored in
-`public.client_settings` and shared by every session. The API listens on loopback and has no user authentication,
-so do not expose it directly to a public network.
+`public.client_settings` and shared by every session. Every route except
+`/api/auth/login`, `/callback` and `/logout` requires a session (see
+[Authentication](#authentication)).
 
 ### Live channel
 

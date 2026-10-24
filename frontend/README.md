@@ -4,7 +4,10 @@ React 19, TypeScript, Vite, Tailwind CSS, Recharts и React Router.
 
 ## Запуск
 
-Сначала запустите PostgreSQL и Rust API из корня проекта (`cargo run --bin market_api`), затем:
+Сначала запустите PostgreSQL и Rust API из корня проекта. Для локальной
+разработки без OIDC-провайдера: `AUTH_DISABLED=true cargo run --bin market_api`;
+с провайдером задайте `OIDC_*` и `PUBLIC_URL=http://127.0.0.1:5173`
+(см. раздел Authentication в корневом README). Затем:
 
 ```sh
 cd frontend
@@ -15,6 +18,17 @@ npm run dev
 Vite слушает `http://127.0.0.1:5173` и проксирует `/api` (включая WebSocket
 `/api/client/ws`) на `127.0.0.1:3000`.
 Проверка сборки: `npm run build`. Тест модели: `npm test`.
+
+## Вход
+
+`AuthGate` (`src/hooks/useAuth.tsx`) запрашивает `GET /api/auth/me` и без
+сессии показывает экран входа: кнопка ведёт на `/api/auth/login`, дальше
+провайдер OIDC и возврат на исходную страницу. Ошибки входа приходят как
+`?authError=`. В шапке — email, роль и выход. Роль `viewer` видит настройки
+только для чтения. Если WebSocket закрылся, сессия перепроверяется: истёкшая
+или отозванная сессия возвращает на экран входа. В режиме `npm run dev` Vite
+проксирует Market Simulator без проверки сессии; в Docker её выполняет
+`server.mjs`.
 
 ## Данные
 

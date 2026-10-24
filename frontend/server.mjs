@@ -40,10 +40,22 @@ function proxyUpgrade(req,socket,head,target){
  outgoing.end();
 }
 
+const API='http://host.docker.internal:3000';
+
+// Market Simulator has no auth of its own: let a request through only with a live market_api session.
+function authorized(req){
+ return new Promise(resolve=>{
+  const check=http.request(new URL('/api/auth/me',API),{headers:{cookie:req.headers.cookie??''}},response=>{response.resume();resolve(response.statusCode===200);});
+  check.setTimeout(10000,()=>check.destroy());
+  check.on('error',()=>resolve(false));
+  check.end();
+ });
+}
+
 function serve(req,res){
  const pathname=new URL(req.url,'http://localhost').pathname;
- if(pathname.startsWith('/api/market/v1/')||pathname.startsWith('/api/market/v2/'))return proxy(req,res,'http://simulator:8091');
- if(pathname.startsWith('/api/'))return proxy(req,res,'http://host.docker.internal:3000');
+ if(pathname.startsWith('/api/market/v1/')||pathname.startsWith('/api/market/v2/'))return void authorized(req).then(ok=>{if(ok)return proxy(req,res,'http://simulator:8091');res.writeHead(401,{'content-type':'application/json'});res.end('{"error":"unauthorized"}');});
+ if(pathname.startsWith('/api/'))return proxy(req,res,API);
  let file;
  try{file=path.resolve(root,`.${decodeURIComponent(pathname)}`);}catch{res.writeHead(400);res.end();return;}
  if(!file.startsWith(`${root}${path.sep}`)&&file!==root){res.writeHead(403);res.end();return;}
@@ -57,7 +69,7 @@ function serve(req,res){
 
 const server=http.createServer(serve);
 server.on('upgrade',(req,socket,head)=>{
- if(new URL(req.url,'http://localhost').pathname==='/api/client/ws')return proxyUpgrade(req,socket,head,'http://host.docker.internal:3000');
+ if(new URL(req.url,'http://localhost').pathname==='/api/client/ws')return proxyUpgrade(req,socket,head,API);
  socket.destroy();
 });
 server.listen(80,'0.0.0.0',()=>console.log('Frontend listening on port 80'));
