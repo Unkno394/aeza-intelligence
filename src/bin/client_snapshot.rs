@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use aeza_intelligence::{PgAdapter, historical::HistoricalModel, model::ClientFeatures};
-use anyhow::{Context, Result};
-use chrono::Utc;
+use anyhow::{Context, Result, bail, ensure};
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use sqlx::Row;
 
@@ -14,33 +14,74 @@ struct Cli {
     /// Keep checking hourly; each account gets at most one snapshot per UTC day.
     #[arg(long)]
     schedule: bool,
+    /// Test one fixture account at a controlled UTC instant.
+    #[arg(long)]
+    as_of: Option<DateTime<Utc>>,
+    #[arg(long, allow_hyphen_values = true)]
+    account_id: Option<i64>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.schedule && (cli.as_of.is_some() || cli.account_id.is_some()) {
+        bail!("--schedule cannot be combined with a controlled date or account");
+    }
+    if cli.as_of.is_some() != cli.account_id.is_some() {
+        bail!("--as-of and --account-id must be supplied together");
+    }
     let adapter = PgAdapter::connect(&cli.database_url).await?;
     adapter.migrate().await?;
+    if let Some(account_id) = cli.account_id {
+        ensure!(
+            account_id < 0,
+            "controlled dates are restricted to negative fixture IDs"
+        );
+        let email: Option<String> =
+            sqlx::query_scalar("SELECT email FROM public.accounts WHERE id = $1")
+                .bind(account_id)
+                .fetch_optional(adapter.pool())
+                .await?;
+        ensure!(
+            email.as_deref().is_some_and(
+                |email| email.starts_with("model-fixture-") && email.ends_with("@example.test")
+            ),
+            "controlled dates require a generated model fixture account"
+        );
+    }
     loop {
-        match collect(&adapter).await {
-            Ok(count) => println!("saved {count} client snapshots"),
-            Err(error) if cli.schedule => eprintln!("client snapshot failed: {error:#}"),
-            Err(error) => return Err(error),
-        }
+        let failed =
+            match collect_at(&adapter, cli.as_of.unwrap_or_else(Utc::now), cli.account_id).await {
+                Ok(count) => {
+                    println!("saved {count} client snapshots");
+                    false
+                }
+                Err(error) if cli.schedule => {
+                    eprintln!("client snapshot failed: {error:#}; retrying in 60 seconds");
+                    true
+                }
+                Err(error) => return Err(error),
+            };
         if !cli.schedule {
             break;
         }
-        tokio::time::sleep(Duration::from_secs(3600)).await;
+        tokio::time::sleep(Duration::from_secs(if failed { 60 } else { 3600 })).await;
     }
     Ok(())
 }
 
-async fn collect(adapter: &PgAdapter) -> Result<usize> {
-    let now = Utc::now();
+async fn collect_at(
+    adapter: &PgAdapter,
+    now: DateTime<Utc>,
+    account_id: Option<i64>,
+) -> Result<usize> {
     let day = now.date_naive();
     let clients = adapter.client_features(now, "7 days").await?;
     let mut count = 0;
-    for client in clients {
+    for client in clients
+        .into_iter()
+        .filter(|client| account_id.is_none_or(|id| client.account_id == id))
+    {
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM public.client_snapshots WHERE account_id = $1 AND observed_on = $2)",
         )

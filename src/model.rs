@@ -113,7 +113,7 @@ impl Dataset {
 }
 
 /// One row of `public.client_features(as_of, horizon)`; see migration 007 for definitions.
-#[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 #[sqlx(rename_all = "camelCase")]
 pub struct ClientFeatures {
