@@ -1,5 +1,5 @@
 import {createDataset,defaults} from '../mocks/data';
-import type {Dataset,RiskResult,Settings} from '../types';
+import type {Dataset,Settings} from '../types';
 export interface AnalyzerApi { getData():Promise<Dataset>; getSettings():Promise<Settings>; saveSettings(settings:Settings):Promise<void>; saveData(data:Dataset):Promise<void> }
 const pause=()=>new Promise(r=>setTimeout(r,300));
 function read<T>(key:string,fallback:T):T {const raw=localStorage.getItem(key);return raw?JSON.parse(raw):fallback;}
@@ -9,13 +9,3 @@ export const mockApi:AnalyzerApi={
  async saveSettings(settings){await pause();localStorage.setItem('aeza-settings-v1',JSON.stringify(settings));},
  async saveData(data){await pause();localStorage.setItem('aeza-data-v1',JSON.stringify(data));}
 };
-// REST adapter implements this contract; the UI does not depend on mock storage.
-export class HttpApi implements AnalyzerApi {
- constructor(private baseUrl:string){}
- private async request<T>(path:string,init?:RequestInit):Promise<T>{const r=await fetch(`${this.baseUrl}${path}`,{...init,headers:{'Content-Type':'application/json',...init?.headers}});if(!r.ok)throw new Error(`API: ${r.status}`);return r.status===204?undefined as T:r.json();}
- getData(){return this.request<Dataset>('/dataset');}
- async getRisks(settings:Settings){const rows=await this.request<(RiskResult&{accountId:string})[]>('/snapshot',{method:'POST',body:JSON.stringify(settings)});return Object.fromEntries(rows.map(({accountId,...risk})=>[accountId,risk])) as Record<string,RiskResult>;}
- async getSettings(){return read('aeza-settings-v1',defaults);}
- async saveSettings(s:Settings){localStorage.setItem('aeza-settings-v1',JSON.stringify(s));}
- async saveData(_d:Dataset):Promise<void>{throw new Error('Клиентские данные доступны только для чтения');}
-}

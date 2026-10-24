@@ -28,6 +28,7 @@ BEGIN
     FROM unnest(ARRAY[
         'public.accounts', 'public.services', 'public.transactions',
         'public.admins', 'public.operation_logs', 'public.client_snapshots',
+        'public.client_settings',
         'market_intelligence.providers',
         'market_intelligence.provider_tariffs',
         'market_intelligence.tariff_prices',

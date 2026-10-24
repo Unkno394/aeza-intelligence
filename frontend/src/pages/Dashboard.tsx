@@ -9,10 +9,9 @@ import {Button} from '../components/ui/button';
 import {ChartTooltip} from '../components/ChartTooltip';
 import type {RiskLevel} from '../types';
 export default function Dashboard(){
- const {data,settings,risks,riskError}=useAnalyzer();const [search,setSearch]=useState(''),[filter,setFilter]=useState('all'),[sort,setSort]=useState('score'),[direction,setDirection]=useState(-1),[page,setPage]=useState(0),[limit,setLimit]=useState(5);
+ const {data,settings,risks}=useAnalyzer();const [search,setSearch]=useState(''),[filter,setFilter]=useState('all'),[sort,setSort]=useState('score'),[direction,setDirection]=useState(-1),[page,setPage]=useState(0),[limit,setLimit]=useState(5);
  const rows=useMemo(()=>data&&risks?data.accounts.flatMap(a=>risks[a.id]?[{...a,...risks[a.id]}]:[]):[],[data,risks]);
  if(!data||!settings)return null;
- if(riskError)return <div className="market-state" role="alert">Dashboard: Rust API не вернул Risk Score — {riskError}</div>;
  if(!risks)return <div className="market-state" role="status">Загружаем Risk Score из Rust API…</div>;
  if(rows.length!==data.accounts.length)return <div className="market-state" role="alert">Risk Score получен не для всех клиентов: {rows.length} из {data.accounts.length}.</div>;
  const counts=(['low','medium','high'] as RiskLevel[]).map(level=>({level,name:{low:'Низкий риск',medium:'Средний риск',high:'Высокий риск'}[level],value:rows.filter(a=>a.level===level).length}));

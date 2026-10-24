@@ -7,7 +7,7 @@ import {Badge,Panel,Empty,colors} from '../components/common';
 import {Button} from '../components/ui/button';
 type RustClientReport={accountId:number;mahalanobis:number|null;neighbours:number[];peers:number[];conditionalZ:number[]};
 type RustReport={clients:RustClientReport[]};
-export default function Snapshot(){const {data,settings,risks,riskError,saveData}=useAnalyzer();const [params,setParams]=useSearchParams();const [editing,setEditing]=useState(false),[balance,setBalance]=useState(''),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
+export default function Snapshot(){const {data,settings,risks,saveData}=useAnalyzer();const [params,setParams]=useSearchParams();const [editing,setEditing]=useState(false),[balance,setBalance]=useState(''),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
  const [rustReport,setRustReport]=useState<RustReport|null>(null);
  const [rustError,setRustError]=useState('');
  useEffect(()=>{const controller=new AbortController();fetch('/api/client/analysis',{signal:controller.signal}).then(async response=>{if(!response.ok)throw new Error(`API: ${response.status}`);return response.json() as Promise<RustReport>;}).then(setRustReport).catch(error=>{if(!controller.signal.aborted)setRustError(String(error));});return ()=>controller.abort();},[]);
@@ -15,7 +15,7 @@ export default function Snapshot(){const {data,settings,risks,riskError,saveData
  const account=data.accounts.find(a=>a.id===params.get('client'))??data.accounts[0];if(!account)return <Empty title="Нет клиентов" icon={<Server/>}>Добавьте аккаунты через API для анализа.</Empty>;
  const rustClient=rustReport?.clients.find(item=>String(item.accountId)===account.id);
  const risk=risks?.[account.id],services=data.services.filter(s=>s.accountId===account.id),transactions=data.transactions.filter(t=>t.accountId===account.id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
- if(!risk)return <div className="market-state" role={riskError?'alert':'status'}>{riskError?`Snapshot Model недоступна: ${riskError}`:'Рассчитываем Snapshot Model на сервере…'}</div>;
+ if(!risk)return <div className="market-state" role="status">Рассчитываем Snapshot Model на сервере…</div>;
  async function changeBalance(){const value=Number(balance);if(!Number.isFinite(value)||value<0){setMessage('Введите неотрицательную сумму в евро');return;}setBusy(true);try{await saveData({...data!,accounts:data!.accounts.map(a=>a.id===account.id?{...a,balanceCents:Math.round(value*100)}:a)});setEditing(false);setMessage('Баланс сохранён. Риск пересчитан.');}catch{setMessage('Не удалось сохранить баланс');}finally{setBusy(false);}}
  async function toggle(id:string){setBusy(true);try{await saveData({...data!,services:data!.services.map(s=>s.id===id?{...s,autoRenew:!s.autoRenew}:s)});setMessage('Автопродление обновлено. Риск пересчитан.');}catch{setMessage('Не удалось сохранить изменение');}finally{setBusy(false);}}
  return <><div className="page-heading"><div><div className="eyebrow">ОБЪЯСНИМАЯ АНАЛИТИКА</div><h1>Snapshot Model</h1><p>Текущее состояние клиента и причины риска.</p></div><label className="client-select">Клиент<select value={account.id} onChange={e=>{setParams({client:e.target.value});setEditing(false);setMessage('');}}>{data.accounts.map(a=><option value={a.id} key={a.id}>{a.name} · {a.id}</option>)}</select></label></div>

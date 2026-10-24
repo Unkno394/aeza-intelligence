@@ -114,8 +114,9 @@ Dashboard, Snapshot and Historical in headless Chromium and compares their
 Risk Score with the Rust API.
 Existing positive client IDs and identity sequences remain unchanged. The
 script refuses to reuse a negative ID owned by a non-fixture record. The
-Snapshot page requests its Risk Score from `POST /api/client/snapshot`; the
-Historical page reads persisted daily state.
+Dashboard and Snapshot pages receive their Risk Score over the
+`/api/client/ws` WebSocket (see [Live channel](#live-channel)); the Historical
+page reads persisted daily state.
 
 ### One PostgreSQL database
 
@@ -135,13 +136,35 @@ the migration to stop with an explicit error for inspection.
 
 Outside Docker, start the API with `cargo run --bin market_api`. It listens on
 `127.0.0.1:3000`; the Vite frontend proxies `/api` there. The API serves
-`/api/client/dataset`, `/api/client/analysis`,
-`/api/client/historical/{id}`, and the three `/api/market/*` routes.
+`/api/client/ws`, `/api/client/dataset`, `POST /api/client/snapshot`,
+`/api/client/analysis`, `/api/client/historical/{id}`, and the three
+`/api/market/*` routes.
 For a one-time snapshot run, use `cargo run --bin client_snapshot` after
 loading `.env`. Run `bash scripts/check_api.sh` to print response counts.
-Client data is read-only in the frontend; personal model settings are stored
-in the browser. The API listens on loopback and has no user authentication,
+Client data is read-only in the frontend; Risk Score settings are stored in
+`public.client_settings` and shared by every session. The API listens on loopback and has no user authentication,
 so do not expose it directly to a public network.
+
+### Live channel
+
+`GET /api/client/ws` upgrades to a WebSocket carrying JSON messages with a
+`type` field. The server sends:
+
+- `snapshot` — `{dataset, settings, risks}` on connect and after a session
+  falls behind;
+- `dataset` — accounts, services or transactions changed (detected by polling
+  `operation_logs` every 2 seconds);
+- `scores` — `{changed, removed}`: only the accounts whose Risk Score changed,
+  after a data or settings change and at least once a minute, since scores
+  depend on the current time;
+- `settings` — Risk Score settings changed in any session;
+- `ack` / `error` — the reply to a client request (`error.requestId` is `null`
+  for an unreadable message).
+
+The client sends `{"type": "updateSettings", "requestId": "1", "settings": {...}}`.
+The settings are validated, saved and broadcast to every session together with
+the resulting `scores`. The frontend reconnects with exponential backoff and
+receives a fresh `snapshot` after each reconnect.
 
 Existing market rows remain in place. The migration runner records applied
 versions in `_sqlx_migrations` so repeated runs skip completed migrations.
