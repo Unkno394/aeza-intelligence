@@ -14,7 +14,6 @@ use sqlx::{PgPool, Row};
 
 const SOURCE: &str = "google search";
 const API_URL: &str = "https://api.trendsmcp.ai/api";
-const SCHEMA: &str = include_str!("../../migrations/002_search_interest.sql");
 
 #[derive(Parser)]
 #[command(about = "Collect weekly Google Search interest for VPS providers")]
@@ -81,7 +80,9 @@ async fn main() -> Result<()> {
         .max_connections(2)
         .connect(&database_url)
         .await?;
-    sqlx::raw_sql(SCHEMA).execute(&pool).await?;
+    aeza_intelligence::PgAdapter::from_pool(pool.clone())
+        .migrate()
+        .await?;
     match cli.command {
         Command::Once => refresh(&pool, &client, &cli.api_key, cli.transport).await,
         Command::Schedule => loop {
@@ -141,13 +142,20 @@ async fn fetch_and_save(
         }
         sqlx::query(
             "INSERT INTO market_intelligence.search_interest \
-             (brand_code, source, observed_on, score, volume, collected_at) \
-             VALUES ($1, $2, $3, $4, $5, now()) \
+             (brand_code, source, comparison_group, observed_on, score, volume, collected_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, now()) \
              ON CONFLICT (brand_code, source, observed_on) DO UPDATE SET \
-             score = EXCLUDED.score, volume = EXCLUDED.volume, collected_at = EXCLUDED.collected_at",
+             score = EXCLUDED.score, volume = EXCLUDED.volume, \
+             comparison_group = EXCLUDED.comparison_group, collected_at = EXCLUDED.collected_at",
         )
-        .bind(code).bind(SOURCE).bind(point.date).bind(point.value).bind(point.volume)
-        .execute(&mut *transaction).await?;
+        .bind(code)
+        .bind(SOURCE)
+        .bind(format!("trendsmcp:{code}"))
+        .bind(point.date)
+        .bind(point.value)
+        .bind(point.volume)
+        .execute(&mut *transaction)
+        .await?;
         count += 1;
     }
     if count == 0 {

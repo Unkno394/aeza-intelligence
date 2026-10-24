@@ -3,6 +3,7 @@ import {BarChart,Bar,LineChart,Line,CartesianGrid,XAxis,YAxis,Tooltip,Legend,Ref
 import {RefreshCw,Play,Download} from 'lucide-react';
 import {Panel} from '../../components/common';
 import {Button} from '../../components/ui/button';
+import {GlassSelect} from '../../components/ui/GlassSelect';
 import {MarketApi,type Scenario,type Sensitivity} from './api';
 import type {SeedStatistics} from './statisticsTypes';
 import {number2} from './format';
@@ -24,7 +25,7 @@ export function Statistics({scenario}:{scenario:Scenario}) {
  const frequencies=result?.strategies.map(s=>({name:names[s.strategy]??s.strategy,risk:s.loss_probability_percent,sole:s.sole_wins,tie:s.tied_wins}))??[];
  const leaders=result?.strategies.filter(s=>s.leading_percent===Math.max(...result.strategies.map(s=>s.leading_percent)))??[];
  return <section aria-label="Статистика seed"><Panel title="Статистика на 100 seed" subtitle="Диапазон прибыли, риск убытков и устойчивость стратегии">
- <div className="market-fields"><label>Сравнить цены<select aria-label="Стратегии статистики" value={mode} onChange={e=>setMode(e.target.value as 'audit'|'selected')}><option value="audit">Базовая · +36% · −28%</option><option value="selected">Выбранные в симуляции</option></select></label><label>Чувствительность<select aria-label="Чувствительность статистики" value={level} onChange={e=>setLevel(e.target.value as Sensitivity)}><option value="low">Низкая</option><option value="medium">Средняя</option><option value="high">Высокая</option></select></label></div>
+ <div className="market-fields"><label>Сравнить цены<GlassSelect aria-label="Стратегии статистики" value={mode} onChange={value=>setMode(value as 'audit'|'selected')} options={[{value:'audit',label:'Базовая · +36% · −28%'},{value:'selected',label:'Выбранные в симуляции'}]}/></label><label>Чувствительность<GlassSelect aria-label="Чувствительность статистики" value={level} onChange={value=>setLevel(value as Sensitivity)} options={[{value:'low',label:'Низкая'},{value:'medium',label:'Средняя'},{value:'high',label:'Высокая'}]}/></label></div>
  <p className="market-hint">100 запусков Rust, seed 0–99. Цены, бюджеты, приток, затраты и мощности — из текущих настроек. Меняются только виртуальные покупатели и события. Лидерство — среди выбранных стратегий.</p>
  <div className="market-submit"><Button disabled={busy||!input.strategies.length} onClick={()=>void run()}>{busy?<RefreshCw size={16} className="spin"/>:<Play size={16}/>} {busy?'Считаем 100 seed…':'Рассчитать статистику'}</Button>{result&&<Button onClick={download}><Download size={15}/>JSON статистики</Button>}<span role="status">{busy?'Результаты появятся после завершения всех запусков':stale?'Настройки изменены — показан прошлый расчёт':''}</span></div>
  {error&&<p className="notice" role="alert">{error}</p>}

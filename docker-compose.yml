@@ -56,9 +56,12 @@ services:
     <<: *app
     restart: unless-stopped
     entrypoint: ["sh", "-c"]
+    volumes:
+      - ./market-simulator/data/market-snapshot.json:/data/market-snapshot.json:ro
     command:
       - |
         while true; do
+          market_import aeza-snapshot --file /data/market-snapshot.json || echo "Aéza catalog import failed, retrying in 24h"
           market_import run --mode live --max-archives 0 || echo "market_import failed, retrying in 24h"
           market_fx || echo "market_fx failed, retrying in 24h"
           sleep 86400

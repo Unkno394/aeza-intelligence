@@ -111,6 +111,12 @@ pub fn parse_html(provider: &str, html: &str) -> Vec<Offer> {
             }
         }
         "selectel" => parse_selectel(&document),
+        "contabo" => {
+            let mut offers = parse_contabo(&document);
+            offers.extend(parse_contabo_grid(&document));
+            offers.extend(parse_contabo_json_ld(&document));
+            offers
+        }
         "hetzner" => {
             let current = parse_hetzner_current(&document);
             if current.is_empty() {
@@ -187,13 +193,7 @@ fn parse_firstvds(document: &Html) -> Vec<Offer> {
                 billing_period: Some("month".to_owned()),
                 price_kind: "regular".to_owned(),
                 vat_included: None,
-                raw_excerpt: excerpt(&format!(
-                    "{name}; CPU={}; RAM={}; disk={}; price={}",
-                    cpu.get(column).map_or("", String::as_str),
-                    ram.get(column).map_or("", String::as_str),
-                    disk.get(column).map_or("", String::as_str),
-                    price.get(column).map_or("", String::as_str)
-                )),
+                raw_excerpt: excerpt(&column_details(&rows, column)),
             });
         }
     }
@@ -219,18 +219,22 @@ fn parse_timeweb(document: &Html) -> Vec<Offer> {
         }
         offers.push(Offer {
             plan_key: name.clone(),
-            plan_name: name,
+            plan_name: name.clone(),
             cpu_cores: first_int(&values[0]),
             ram_mib: memory_mib(&values[1]),
             disk_gib: disk_gib(&values[2]),
             disk_type: Some("NVMe".to_owned()),
-            region: None,
+            region: if name.starts_with("MSK ") {
+                Some("Moscow".to_owned())
+            } else {
+                None
+            },
             price_minor: money_minor(&price_text),
             currency: Some("RUB".to_owned()),
             billing_period: Some("month".to_owned()),
             price_kind: "regular".to_owned(),
             vat_included: None,
-            raw_excerpt: excerpt(&format!("{price_text}; {}", values.join("; "))),
+            raw_excerpt: excerpt(&normalized_text(row)),
         });
     }
     offers
@@ -291,13 +295,7 @@ fn parse_timeweb_legacy(document: &Html) -> Vec<Offer> {
                 billing_period: Some("month".to_owned()),
                 price_kind: "regular".to_owned(),
                 vat_included: None,
-                raw_excerpt: excerpt(&format!(
-                    "{}; CPU={}; RAM={}; disk={}",
-                    header[column],
-                    cpu.get(column).map_or("", String::as_str),
-                    ram.get(column).map_or("", String::as_str),
-                    disk.get(column).map_or("", String::as_str)
-                )),
+                raw_excerpt: excerpt(&column_details(&rows, column)),
             });
         }
     }
@@ -352,6 +350,289 @@ fn parse_selectel(document: &Html) -> Vec<Offer> {
             price_kind: "regular".to_owned(),
             vat_included: None,
             raw_excerpt: excerpt(&normalized_text(card)),
+        });
+    }
+    offers
+}
+
+fn parse_contabo(document: &Html) -> Vec<Offer> {
+    let table = selector("table");
+    let tr = selector("tr");
+    let cell = selector("th, td");
+    let mut offers = Vec::new();
+    for table in document.select(&table) {
+        let rows: Vec<Vec<String>> = table
+            .select(&tr)
+            .map(|row| row.select(&cell).map(normalized_text).collect())
+            .collect();
+        let Some(header) = rows.first() else { continue };
+        let column = |needle: &str| {
+            header
+                .iter()
+                .position(|value| value.to_lowercase().contains(&needle.to_lowercase()))
+        };
+        let (Some(model_col), Some(cpu_col), Some(ram_col), Some(storage_col), Some(price_col)) = (
+            column("model"),
+            column("cpu"),
+            column("ram"),
+            column("storage"),
+            column("price"),
+        ) else {
+            continue;
+        };
+        let region_col = column("region").or_else(|| column("location"));
+        for row in rows.iter().skip(1) {
+            let Some(name) = row.get(model_col).map(|s| s.trim()) else {
+                continue;
+            };
+            if !["Cloud VPS", "Cloud VDS", "Storage VPS"]
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+            {
+                continue;
+            }
+            let get = |index: usize| row.get(index).map(String::as_str).unwrap_or("");
+            let storage = get(storage_col);
+            let price_text = get(price_col);
+            if let Some(price) = contabo_money_minor(price_text) {
+                offers.push(Offer {
+                    plan_key: name.to_owned(),
+                    plan_name: name.to_owned(),
+                    cpu_cores: first_int(get(cpu_col)),
+                    ram_mib: memory_mib(get(ram_col)),
+                    disk_gib: disk_gib(storage),
+                    disk_type: if storage.to_lowercase().contains("nvme") {
+                        Some("NVMe".to_owned())
+                    } else if storage.to_lowercase().contains("ssd") {
+                        Some("SSD".to_owned())
+                    } else if storage.to_lowercase().contains("hdd") {
+                        Some("HDD".to_owned())
+                    } else {
+                        None
+                    },
+                    region: region_col
+                        .map(|index| get(index).trim().to_owned())
+                        .filter(|region| {
+                            !region.is_empty()
+                                && !matches!(
+                                    region.to_lowercase().as_str(),
+                                    "all regions" | "multiple locations" | "global" | "worldwide"
+                                )
+                        }),
+                    price_minor: Some(price),
+                    currency: if price_text.contains('€') {
+                        Some("EUR".to_owned())
+                    } else if price_text.contains('$') {
+                        Some("USD".to_owned())
+                    } else {
+                        None
+                    },
+                    billing_period: Some("month".to_owned()),
+                    price_kind: if row.iter().any(|value| {
+                        let lower = value.to_lowercase();
+                        lower.contains("sold out") || lower.contains("notify me")
+                    }) {
+                        "unavailable_or_waitlist".to_owned()
+                    } else {
+                        "listed_monthly".to_owned()
+                    },
+                    vat_included: if header[price_col].to_lowercase().contains("including vat") {
+                        Some(true)
+                    } else if header[price_col].to_lowercase().contains("excluding vat") {
+                        Some(false)
+                    } else {
+                        None
+                    },
+                    raw_excerpt: excerpt(
+                        &row.iter()
+                            .enumerate()
+                            .map(|(i, value)| {
+                                format!("{}: {}", header.get(i).map_or("", String::as_str), value)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    ),
+                });
+            }
+        }
+    }
+    offers
+}
+
+fn contabo_name(name: &str) -> bool {
+    ["Cloud VPS", "Cloud VDS", "Storage VPS"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
+fn contabo_disk_type(value: &str) -> Option<String> {
+    let lower = value.to_lowercase();
+    if lower.contains("nvme") {
+        Some("NVMe".to_owned())
+    } else if lower.contains("ssd") {
+        Some("SSD".to_owned())
+    } else if lower.contains("hdd") {
+        Some("HDD".to_owned())
+    } else {
+        None
+    }
+}
+
+fn contabo_offer(
+    name: String,
+    cpu: &str,
+    ram: &str,
+    disk: &str,
+    price: &str,
+    details: &str,
+) -> Option<Offer> {
+    if !contabo_name(&name) || !price.contains("/ month") {
+        return None;
+    }
+    let currency = if price.contains('€') {
+        "EUR"
+    } else if price.contains('$') {
+        "USD"
+    } else {
+        return None;
+    };
+    Some(Offer {
+        plan_key: name.clone(),
+        plan_name: name,
+        cpu_cores: first_int(cpu),
+        ram_mib: memory_mib(ram),
+        disk_gib: disk_gib(disk),
+        disk_type: contabo_disk_type(disk),
+        region: None,
+        price_minor: contabo_money_minor(price),
+        currency: Some(currency.to_owned()),
+        billing_period: Some("month".to_owned()),
+        price_kind: "listed_monthly".to_owned(),
+        vat_included: None,
+        raw_excerpt: excerpt(details),
+    })
+}
+
+fn parse_contabo_grid(document: &Html) -> Vec<Offer> {
+    let grid = selector(".pricing-table.vps");
+    let title = selector(".row-title");
+    let spec = selector(".spec-title");
+    let mut offers = Vec::new();
+    for grid in document.select(&grid) {
+        let mut name = None;
+        let mut specs = Vec::new();
+        let mut details = Vec::new();
+        for child in grid.children().filter_map(ElementRef::wrap) {
+            if let Some(title) = child.select(&title).next() {
+                name = Some(normalized_text(title));
+                specs.clear();
+                details.clear();
+                continue;
+            }
+            if name.is_none() {
+                continue;
+            }
+            let text = normalized_text(child);
+            if let Some(spec) = child.select(&spec).next() {
+                specs.push(normalized_text(spec));
+            }
+            details.push(text.clone());
+            if child
+                .value()
+                .attr("class")
+                .is_some_and(|classes| classes.split_whitespace().any(|class| class == "price"))
+            {
+                let cpu = specs
+                    .iter()
+                    .find(|item| item.to_lowercase().contains("cpu"));
+                let ram = specs
+                    .iter()
+                    .find(|item| item.to_lowercase().contains("ram"));
+                let disk = specs.iter().find(|item| {
+                    let lower = item.to_lowercase();
+                    lower.contains("nvme") || lower.contains("ssd") || lower.contains("hdd")
+                });
+                if let (Some(name), Some(cpu), Some(ram), Some(disk)) =
+                    (name.take(), cpu, ram, disk)
+                {
+                    if let Some(offer) =
+                        contabo_offer(name, cpu, ram, disk, &text, &details.join("; "))
+                    {
+                        offers.push(offer);
+                    }
+                }
+            }
+        }
+    }
+    offers
+}
+
+fn number_before_marker(value: &str, marker: &str) -> Option<i32> {
+    let index = value.to_lowercase().find(&marker.to_lowercase())?;
+    value[..index]
+        .split(|character: char| !character.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .last()?
+        .parse()
+        .ok()
+}
+
+fn parse_contabo_json_ld(document: &Html) -> Vec<Offer> {
+    let scripts = selector("script[type='application/ld+json']");
+    let mut offers = Vec::new();
+    for script in document.select(&scripts) {
+        let body = script.text().collect::<String>();
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
+            continue;
+        };
+        if value["@type"] != "Product" {
+            continue;
+        }
+        let (Some(name), Some(description)) =
+            (value["name"].as_str(), value["description"].as_str())
+        else {
+            continue;
+        };
+        if !contabo_name(name) {
+            continue;
+        }
+        let cpu = [" vcpu", " physical cpu cores", " core", " cores"]
+            .iter()
+            .find_map(|marker| number_before_marker(description, marker));
+        let ram = description.to_lowercase().find("ram").and_then(|index| {
+            let start = index.saturating_sub(12);
+            memory_mib(&description[start..index + 3])
+        });
+        let disk = ["nvme", "ssd", "hdd"].iter().find_map(|kind| {
+            description.to_lowercase().find(kind).and_then(|index| {
+                let start = index.saturating_sub(12);
+                disk_gib(&description[start..index + kind.len()])
+            })
+        });
+        let Some(price) = value["offers"]
+            .as_array()
+            .and_then(|offers| offers.iter().find(|offer| offer["priceCurrency"] == "EUR"))
+            .and_then(|offer| offer["lowPrice"].as_f64())
+        else {
+            continue;
+        };
+        if !price.is_finite() || price <= 0.0 {
+            continue;
+        }
+        offers.push(Offer {
+            plan_key: name.to_owned(),
+            plan_name: name.to_owned(),
+            cpu_cores: cpu,
+            ram_mib: ram,
+            disk_gib: disk,
+            disk_type: contabo_disk_type(description),
+            region: None,
+            price_minor: Some((price * 100.0).round() as i64),
+            currency: Some("EUR".to_owned()),
+            billing_period: Some("month".to_owned()),
+            price_kind: "listed_monthly".to_owned(),
+            vat_included: None,
+            raw_excerpt: excerpt(description),
         });
     }
     offers
@@ -473,6 +754,24 @@ fn normalized_text(element: ElementRef<'_>) -> String {
         .join(" ")
 }
 
+fn column_details(rows: &[Vec<String>], column: usize) -> String {
+    rows.iter()
+        .filter_map(|row| {
+            let value = row.get(column)?.trim();
+            if value.is_empty() {
+                return None;
+            }
+            let label = row.first().map_or("", String::as_str).trim();
+            Some(if label.is_empty() || label == value {
+                value.to_owned()
+            } else {
+                format!("{label}: {value}")
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn selector(value: &str) -> Selector {
     Selector::parse(value).expect("static CSS selector")
 }
@@ -557,6 +856,63 @@ fn money_minor(value: &str) -> Option<i64> {
     whole.parse::<i64>().ok()?.checked_mul(100)
 }
 
+fn contabo_money_minor(value: &str) -> Option<i64> {
+    if value.contains('.') || value.contains(',') {
+        return money_minor(value);
+    }
+    let groups: Vec<i64> = value
+        .split(|character: char| !character.is_ascii_digit())
+        .filter(|group| !group.is_empty())
+        .filter_map(|group| group.parse().ok())
+        .collect();
+    match groups.as_slice() {
+        [major, minor, ..] if *minor < 100 => major.checked_mul(100)?.checked_add(*minor),
+        [major, ..] => major.checked_mul(100),
+        [] => None,
+    }
+}
+
 fn excerpt(value: &str) -> String {
-    value.chars().take(500).collect()
+    value.chars().take(4000).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_html;
+
+    #[test]
+    fn firstvds_persists_additional_tariff_rows_with_the_offer() {
+        let html = r#"<table>
+          <tr><th>Тариф</th><td>VDS-KVM-SSD-Test</td></tr>
+          <tr><th>Количество процессоров</th><td>4 ядра</td></tr>
+          <tr><th>Оперативная память</th><td>8 ГБ</td></tr>
+          <tr><th>Дисковое пространство</th><td>80 ГБ SSD</td></tr>
+          <tr><th>Трафик</th><td>Безлимитный</td></tr>
+          <tr><th>Стоимость за период: месяц</th><td>1200 ₽</td></tr>
+        </table>"#;
+        let offers = parse_html("firstvds", html);
+        assert_eq!(offers.len(), 1);
+        let offer = &offers[0];
+        assert!(offer.is_complete());
+        assert!(offer.raw_excerpt.contains("Трафик: Безлимитный"));
+        assert!(offer.raw_excerpt.contains("Стоимость за период: месяц"));
+    }
+
+    #[test]
+    fn contabo_parser_captures_price_configuration_and_network_terms() {
+        let html = r#"<table><tr><th>Model</th><th>CPU</th><th>RAM</th><th>Storage</th><th>Port</th><th>Data Transfer</th><th>Price Including VAT</th></tr>
+          <tr><td>Cloud VPS 4</td><td>4 vCPU Cores</td><td>8 GB RAM</td><td>100 GB SSD</td><td>200 Mbit/s</td><td>Unlimited Traffic</td><td>$ 5 28 / month</td></tr></table>"#;
+        let offers = parse_html("contabo", html);
+        assert_eq!(offers.len(), 1);
+        let offer = &offers[0];
+        assert_eq!(offer.cpu_cores, Some(4));
+        assert_eq!(offer.ram_mib, Some(8192));
+        assert_eq!(offer.disk_gib, Some(100));
+        assert_eq!(offer.disk_type.as_deref(), Some("SSD"));
+        assert_eq!(offer.price_minor, Some(528));
+        assert_eq!(offer.currency.as_deref(), Some("USD"));
+        assert!(offer.vat_included.unwrap());
+        assert!(offer.raw_excerpt.contains("Unlimited Traffic"));
+        assert!(offer.raw_excerpt.contains("200 Mbit/s"));
+    }
 }

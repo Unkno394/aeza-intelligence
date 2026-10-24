@@ -10,6 +10,7 @@ pub mod historical;
 pub mod market;
 pub mod market_store;
 pub mod model;
+pub mod sequences;
 pub mod stats;
 
 pub use adapter::{LoadReport, PgAdapter};

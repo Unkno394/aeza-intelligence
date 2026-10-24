@@ -7,10 +7,8 @@ use reqwest::Client;
 use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 
-const SCHEMA: &str = include_str!("../../migrations/003_exchange_rates.sql");
-
 #[derive(Parser)]
-#[command(about = "Fetch historical EUR/RUB rates for imported competitor prices")]
+#[command(about = "Fetch historical EUR/RUB and USD/RUB rates for imported competitor prices")]
 struct Cli {
     #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
     database_url: Option<String>,
@@ -20,6 +18,9 @@ struct Cli {
     /// Date to inspect in dry-run mode; defaults to today.
     #[arg(long)]
     date: Option<NaiveDate>,
+    /// Base currency for dry-run (EUR or USD).
+    #[arg(long, default_value = "EUR")]
+    base: String,
 }
 
 #[derive(Deserialize)]
@@ -36,10 +37,10 @@ async fn main() -> Result<()> {
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
     if cli.dry_run {
         let requested_on = cli.date.unwrap_or_else(|| Utc::now().date_naive());
-        let rate = fetch_rate(&client, requested_on).await?;
+        let rate = fetch_rate(&client, &cli.base.to_uppercase(), requested_on).await?;
         println!(
-            "requested_on={requested_on} rate_on={} EUR/RUB={}",
-            rate.date, rate.rate
+            "requested_on={requested_on} rate_on={} {}/RUB={}",
+            rate.date, rate.base, rate.rate
         );
         return Ok(());
     }
@@ -50,35 +51,38 @@ async fn main() -> Result<()> {
         .max_connections(2)
         .connect(&database_url)
         .await?;
-    sqlx::raw_sql(SCHEMA).execute(&pool).await?;
-    let dates: Vec<NaiveDate> = sqlx::query_scalar(
-        "SELECT DISTINCT p.observed_at::date FROM market_intelligence.tariff_prices p \
-         WHERE p.currency = 'EUR' AND p.price_minor IS NOT NULL \
+    aeza_intelligence::PgAdapter::from_pool(pool.clone())
+        .migrate()
+        .await?;
+    let dates: Vec<(String, NaiveDate)> = sqlx::query_as(
+        "SELECT DISTINCT p.currency::text, p.observed_at::date FROM market_intelligence.tariff_prices p \
+         WHERE p.currency IN ('EUR', 'USD') AND p.price_minor IS NOT NULL \
          AND NOT EXISTS (SELECT 1 FROM market_intelligence.exchange_rates fx \
-           WHERE fx.base = 'EUR' AND fx.quote = 'RUB' AND fx.requested_on = p.observed_at::date) \
-         ORDER BY 1",
+           WHERE fx.base = p.currency AND fx.quote = 'RUB' AND fx.requested_on = p.observed_at::date) \
+         ORDER BY 1, 2",
     )
     .fetch_all(&pool)
     .await?;
     let mut failures = 0;
-    for requested_on in dates {
-        match fetch_rate(&client, requested_on).await {
+    for (base, requested_on) in dates {
+        match fetch_rate(&client, &base, requested_on).await {
             Ok(rate) => {
                 sqlx::query(
                     "INSERT INTO market_intelligence.exchange_rates \
-                     (base, quote, requested_on, rate_on, rate) VALUES ('EUR', 'RUB', $1, $2, $3) \
+                     (base, quote, requested_on, rate_on, rate) VALUES ($1, 'RUB', $2, $3, $4) \
                      ON CONFLICT (base, quote, requested_on) DO UPDATE SET \
                      rate_on = EXCLUDED.rate_on, rate = EXCLUDED.rate, fetched_at = now()",
                 )
+                .bind(&base)
                 .bind(requested_on)
                 .bind(rate.date)
                 .bind(rate.rate)
                 .execute(&pool)
                 .await?;
-                println!("EUR/RUB {requested_on}: rate dated {}", rate.date);
+                println!("{base}/RUB {requested_on}: rate dated {}", rate.date);
             }
             Err(error) => {
-                eprintln!("EUR/RUB {requested_on}: {error:#}");
+                eprintln!("{base}/RUB {requested_on}: {error:#}");
                 failures += 1;
             }
         }
@@ -89,9 +93,13 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn fetch_rate(client: &Client, requested_on: NaiveDate) -> Result<Rate> {
+async fn fetch_rate(client: &Client, base: &str, requested_on: NaiveDate) -> Result<Rate> {
+    if !matches!(base, "EUR" | "USD") {
+        bail!("unsupported base currency: {base}");
+    }
+    let url = format!("https://api.frankfurter.dev/v2/rate/{base}/RUB");
     let response = client
-        .get("https://api.frankfurter.dev/v2/rate/EUR/RUB")
+        .get(url)
         .query(&[("date", requested_on.to_string())])
         .send()
         .await
@@ -102,13 +110,13 @@ async fn fetch_rate(client: &Client, requested_on: NaiveDate) -> Result<Rate> {
         .json()
         .await
         .context("invalid Frankfurter response")?;
-    if rate.base != "EUR"
+    if rate.base != base
         || rate.quote != "RUB"
         || rate.date > requested_on
         || !rate.rate.is_finite()
         || rate.rate <= 0.0
     {
-        bail!("invalid EUR/RUB rate response");
+        bail!("invalid {base}/RUB rate response");
     }
     Ok(rate)
 }

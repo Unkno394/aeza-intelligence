@@ -3,31 +3,44 @@ import {useState,useEffect} from 'react';
 import {RefreshCw} from 'lucide-react';
 import {Panel} from '../../components/common';
 import {Button} from '../../components/ui/button';
+import {GlassSelect} from '../../components/ui/GlassSelect';
 import {MarketApi,type Plan,type Scenario,type MarketSources,type MarketContexts} from './api';
+import './scraped-scenario.css';
+type ScrapedTariff={providerCode:string;provider:string;planKey:string;planName:string;cpuCores:number|null;ramGib:number|null;diskGib:number|null;observedOn:string;priceRub:number|null;sourceUrl:string};
 const usd=(v:number)=>new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB',maximumFractionDigits:2}).format(v);
 export function MarketData({draft,setDraft,official,source,catalog,onRefresh}:{draft:Scenario;setDraft:(s:Scenario)=>void;official:Plan[];source:MarketSources|null;catalog:Plan[];onRefresh:()=>Promise<void>}) {
  const [contexts,setContexts]=useState<MarketContexts>({});
- useEffect(()=>{void new MarketApi().contexts().then(setContexts).catch(()=>{});},[]);
+ const [scraped,setScraped]=useState<ScrapedTariff[]>([]);
+ useEffect(()=>{void new MarketApi().contexts().then(setContexts).catch(()=>{});void fetch('/api/market/prices/monitor').then(r=>r.ok?r.json():[]).then(setScraped).catch(()=>{});},[]);
  const [region,setRegion]=useState('Moscow'),[cpuClass,setCpuClass]=useState('shared'),[busy,setBusy]=useState(false),[error,setError]=useState(''),[search,setSearch]=useState('');
  const selected=official.filter(p=>p.regions.includes(region)&&p.details?.cpu_class===cpuClass).sort((a,b)=>a.vcpu-b.vcpu);
  const rows=catalog.filter(p=>(draft.market==='all'||!draft.market||p.details?.market===draft.market)&&`${p.provider} ${p.name}`.toLowerCase().includes(search.toLowerCase()));
  const capacity=draft.aeza_capacity;
+ const normalize=(value:string)=>value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,'');
+ const close=(a:number|null,b:number)=>a!==null&&Math.abs(a-b)/Math.max(Math.abs(a),Math.abs(b),1)<0.08;
+ const observedMatches=scraped.flatMap(row=>{
+  if(row.priceRub===null||row.cpuCores===null||row.ramGib===null||row.diskGib===null)return [];
+  const plan=catalog.find(p=>normalize(p.provider)===normalize(row.provider)&&normalize(p.name)===normalize(row.planName)&&close(row.cpuCores,p.vcpu)&&close(row.ramGib,p.ram_gb)&&close(row.diskGib,p.disk_gb));
+  return plan?[{row,plan,multiplier:row.priceRub/plan.monthly_usd}]:[];
+ }).filter(match=>Number.isFinite(match.multiplier)&&match.multiplier>=0.05&&match.multiplier<=20);
+ function applyObservedPrices(){const ids=new Set(observedMatches.map(m=>m.plan.id));setDraft({...draft,market_events:[...(draft.market_events??[]).filter(e=>!ids.has(e.plan_id)),...observedMatches.map(({row,plan,multiplier})=>({plan_id:plan.id,starts_month:1,price_multiplier:multiplier,available:true,strategy:null}))]});}
  async function refresh(){setBusy(true);setError('');try{await onRefresh();setContexts(await new MarketApi().contexts());}catch(e){setError(e instanceof Error?e.message:'Ошибка обновления');}finally{setBusy(false);}}
  function loadOfficial(){if(!selected.length){setError('В проверенном снимке нет тарифов этого региона/класса.');return;}setDraft({...draft,aeza_plans:structuredClone(selected.slice(0,3))});setError('');}
  function market(value:string){setDraft({...draft,market:value,segments:draft.segments.map(s=>({...s,region:value==='russia'?'Russia':value==='international'?region==='Moscow'?'EU':region:null}))});}
  return <Panel title="Источники, валюты и мощности" subtitle="Наблюдаемые цены хранятся отдельно от сценарных настроек">
   <p className="market-hint">{source?.catalog_included??catalog.length} предложений конкурентов: 322 VPS Price Index + {catalog.filter(p=>p.details?.service_type==='cloud_vm').length} облачных конфигураций Cloud FinOps. Получено {source?.raw_product_count} SKU-компонентов, это не количество готовых VPS. Официальных тарифов Aéza: {source?.official_aeza_count}, доступны по снимку: {source?.official_aeza_available}.</p>
   <div className="market-fields">
-   <label>Рынок<select aria-label="Рынок предложений" value={draft.market??'all'} onChange={e=>market(e.target.value)}><option value="russia">Россия</option><option value="international">Международный</option><option value="all">Общий</option></select></label>
-   <label>Город тарифов Aéza<select aria-label="Город официальных тарифов Aéza" value={region} onChange={e=>setRegion(e.target.value)}>{[...new Set(official.flatMap(p=>p.regions))].map(r=><option key={r}>{r}</option>)}</select></label>
-   <label>Класс CPU Aéza<select value={cpuClass} onChange={e=>setCpuClass(e.target.value)}><option value="shared">Shared</option><option value="dedicated">Dedicated</option></select></label>
-   <label>Виртуализация покупателей<select aria-label="Требование виртуализации" value={draft.required_virtualization??''} onChange={e=>setDraft({...draft,required_virtualization:e.target.value||null})}><option value="">Без требования; неизвестная допустима</option><option value="kvm">Только подтверждённый KVM</option></select></label>
+   <label>Рынок<GlassSelect aria-label="Рынок предложений" value={draft.market??'all'} onChange={market} options={[{value:'russia',label:'Россия'},{value:'international',label:'Международный'},{value:'all',label:'Общий'}]}/></label>
+   <label>Город тарифов Aéza<GlassSelect aria-label="Город официальных тарифов Aéza" value={region} onChange={setRegion} options={[...new Set(official.flatMap(p=>p.regions))].map(r=>({value:r,label:r}))}/></label>
+   <label>Класс CPU Aéza<GlassSelect value={cpuClass} onChange={setCpuClass} options={[{value:'shared',label:'Shared'},{value:'dedicated',label:'Dedicated'}]}/></label>
+   <label>Виртуализация покупателей<GlassSelect aria-label="Требование виртуализации" value={draft.required_virtualization??''} onChange={value=>setDraft({...draft,required_virtualization:value||null})} options={[{value:'',label:'Без требования; неизвестная допустима'},{value:'kvm',label:'Только подтверждённый KVM'}]}/></label>
   </div>
   <div className="market-options"><fieldset><legend>Допустимые услуги для покупателей</legend><label><input type="checkbox" checked={(draft.accepted_service_types??['vps']).includes('cloud_vm')} onChange={e=>setDraft({...draft,accepted_service_types:e.target.checked?['vps','cloud_vm']:['vps']})}/>Допускать облачные VM как замену VPS</label><label><input type="checkbox" checked={draft.require_complete_monthly_payment??false} onChange={e=>setDraft({...draft,require_complete_monthly_payment:e.target.checked})}/>Только подтверждённый полный платёж, включая налоги</label></fieldset></div>
 
   <div className="market-submit"><Button onClick={loadOfficial} disabled={!selected.length}>Применить первые 3 официальных тарифа Aéza</Button><Button onClick={()=>setDraft({...draft,aeza_plans:structuredClone(draft.aeza_plans.map(p=>({...p,origin:'scenario_assumption',details:undefined,source:'scenario://user-input'})))})}>Обозначить цены как условные</Button><Button disabled={busy} onClick={()=>void refresh()}><RefreshCw size={15} className={busy?'spin':''}/>Перечитать проверенный снимок</Button></div>
   {error&&<p role="alert">{error}</p>}
   <p className="market-hint">Загруженные тарифы Aéza: {draft.aeza_plans.every(p=>p.origin==='observed_list_price')?'официальные наблюдаемые цены; доступность из снимка':'условные или изменённые пользователем цены'}. Никаких замен недоступных тарифов доступными автоматически не производится. Самостоятельное редактирование RUB цены создаёт сценарное отклонение от сохранённого оригинала.</p>
+  <div className="scraped-scenario"><div><strong>Связь с парсерами страниц</strong><p>{scraped.length?`В PostgreSQL загружено ${scraped.length} актуальных строк; с каталогом симулятора совпали ${observedMatches.length} по провайдеру, названию и конфигурации.`:'Ожидаем актуальные тарифы из PostgreSQL.'} Совпавшие цены можно применить к рынку с первого месяца сценария; заданные вручную события для этих тарифов заменятся.</p></div><Button disabled={!observedMatches.length} onClick={applyObservedPrices}>Применить {observedMatches.length} наблюдаемых цен</Button></div>
   <div className="table-scroll"><table><thead><tr><th>Aéza</th><th>Регион / CPU</th><th>Исходная месячная цена</th><th>Исходная почасовая</th><th>Базовая RUB</th><th>Доступность</th><th>Источник / проверка</th></tr></thead><tbody>{draft.aeza_plans.map(p=><tr key={p.id}><td>{p.name}</td><td>{p.regions.join(', ')} / {p.details?.cpu_class??'условный'}</td><td>{p.details?`${number2(p.details.original_price.amount)} ${p.details.original_price.currency}`:'Сценарий'}</td><td>{p.details?.hourly_price?`${number2(p.details.hourly_price.amount)} ${p.details.hourly_price.currency}/час`:'—'}</td><td>{usd(p.monthly_usd)}</td><td>{p.details?.availability==='unavailable'?'Недоступен по источнику':p.details?.availability==='available_from_source'?'Доступен в снимке':'Не подтверждена'}</td><td>{p.source.startsWith('https://')?<a className="text-link" href={p.source} target="_blank" rel="noreferrer">Официальный источник</a>:p.origin}<br/>{p.observed_at||'—'}</td></tr>)}</tbody></table></div>
 
   {capacity&&<><h3>Сценарная ёмкость Aéza</h3><p className="market-hint">Реальная свободная ёмкость не опубликована. Это суммарные лимиты выделяемых виртуальных ресурсов, не число физических ядер. Сначала резервируются продления; новые решения рассматриваются по стабильному ID клиента. Перепродажа сверх лимитов запрещена.</p><div className="market-fields">{(['vcpu','ram_gb','storage_gb'] as const).map(k=><label key={k}>{k==='vcpu'?'vCPU':k==='ram_gb'?'RAM, GB':'Storage, GB'}<input aria-label={`Лимит Aéza ${k}`} type="number" min={0} max={1e9} step={1} value={input2(capacity[k])} onChange={e=>setDraft({...draft,aeza_capacity:{...capacity,[k]:Number(e.target.value),origin:'scenario_assumption',source:'scenario://user-defined-resource-pool'}})}/></label>)}</div></>}

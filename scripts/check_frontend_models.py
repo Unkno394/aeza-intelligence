@@ -46,7 +46,8 @@ def page_text(url):
 def main():
     base = sys.argv[1].rstrip('/') if len(sys.argv) > 1 else 'http://127.0.0.1:8080'
     api = os.environ.get('MARKET_API_BASE_URL', 'http://127.0.0.1:3000').rstrip('/')
-    settings = {'weights': {'balance': 35, 'renewal': 25, 'autoRenew': 15, 'status': 15, 'transactions': 10},
+    settings = {'weights': {'paymentCoverage': 35, 'noAutoProlong': 15, 'prolongWait': 15,
+                            'failedProlong': 10, 'expiringRevenue': 25},
                 'mediumThreshold': 35, 'highThreshold': 65, 'renewalWindowDays': 14}
     request = Request(api + '/api/client/snapshot', data=json.dumps(settings).encode(),
                       headers={'Content-Type': 'application/json'})
@@ -61,7 +62,7 @@ def main():
     assert 'model-fixture-0001@example.test' in snapshot and 'Risk Score рассчитывается Rust API' in snapshot, 'Snapshot did not render the fixture and Rust score'
     assert f'{fixture_score} / 100' in snapshot, 'Snapshot Risk Score differs from Rust API'
     historical = page_text(base + '/historical?client=-8999999')
-    assert 'Накоплено снимков' in historical and re.search(r'\b(?:[6-9]\d|[1-9]\d{2,})\s*/', historical), 'Historical did not render at least 60 stored days'
+    assert 'Снимки' in historical and re.search(r'\b(?:[6-9]\d|[1-9]\d{2,})\s*/', historical), 'Historical did not render at least 60 stored days'
     print('Frontend: Dashboard, Snapshot and Historical rendered persisted fixture data')
 
 

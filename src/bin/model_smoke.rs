@@ -59,6 +59,7 @@ fn feature_map(client: &ClientFeatures) -> BTreeMap<String, f64> {
     let mut values = BTreeMap::from([
         ("services_count".into(), client.services_count as f64),
         ("monthly_spend".into(), client.monthly_spend),
+        ("spendable_balance".into(), client.spendable_balance as f64),
         ("payment_coverage".into(), client.payment_coverage),
         ("upcoming_payments".into(), client.upcoming_payments as f64),
     ]);
@@ -68,9 +69,10 @@ fn feature_map(client: &ClientFeatures) -> BTreeMap<String, f64> {
         ("failed_prolong_share", client.failed_prolong_share),
         ("expiring_revenue_share", client.expiring_revenue_share),
     ] {
-        if let Some(value) = value.filter(|value| value.is_finite()) {
-            values.insert(name.into(), value);
-        }
+        values.insert(
+            name.into(),
+            value.filter(|value| value.is_finite()).unwrap_or(0.0),
+        );
     }
     values
 }
@@ -228,12 +230,18 @@ async fn persist(snapshots: &[SavedSnapshot], database_url: &str) -> Result<u64>
                 .all(|(id, email)| found.get(id).is_some_and(|actual| actual == email)),
         "database accounts do not match generated fixture IDs and emails; no history was written"
     );
+    let event_highwater: i64 =
+        sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM public.operation_logs")
+            .fetch_one(adapter.pool())
+            .await?;
     let mut tx = adapter.pool().begin().await?;
     let mut inserted = 0;
     for row in snapshots {
+        let mut model_state: serde_json::Value = serde_json::from_str(&row.model_state)?;
+        model_state["event_log_cursor"] = serde_json::json!(event_highwater);
         let result = sqlx::query("INSERT INTO public.client_snapshots (account_id, observed_on, observed_at, features, assessment, model_state) VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb) ON CONFLICT (account_id, observed_on) DO NOTHING")
             .bind(row.account_id).bind(row.observed_at.date_naive()).bind(row.observed_at)
-            .bind(&row.features).bind(&row.assessment).bind(&row.model_state)
+            .bind(&row.features).bind(&row.assessment).bind(serde_json::to_string(&model_state)?)
             .execute(&mut *tx).await?;
         inserted += result.rows_affected();
     }

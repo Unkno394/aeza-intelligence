@@ -28,9 +28,12 @@ BEGIN
     FROM unnest(ARRAY[
         'public.accounts', 'public.services', 'public.transactions',
         'public.admins', 'public.operation_logs', 'public.client_snapshots',
+        'public.financial_ledger',
         'market_intelligence.providers',
         'market_intelligence.provider_tariffs',
+        'market_intelligence.tariff_products',
         'market_intelligence.tariff_prices',
+        'market_intelligence.tariff_data_quality',
         'market_intelligence.search_brands',
         'market_intelligence.search_interest',
         'market_intelligence.exchange_rates',
@@ -39,6 +42,15 @@ BEGIN
     WHERE to_regclass(name) IS NULL;
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'Missing tables after migration: %', missing;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema = 'public' AND table_name = 'services'
+                     AND column_name = 'tariff_product_id')
+       OR NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema = 'market_intelligence'
+                     AND table_name = 'search_interest'
+                     AND column_name = 'comparison_group') THEN
+        RAISE EXCEPTION 'Missing tariff identity or search scale column after migration';
     END IF;
 END $$;
 

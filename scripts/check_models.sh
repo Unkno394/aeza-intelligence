@@ -78,9 +78,11 @@ api_base="${MARKET_API_BASE_URL:-http://127.0.0.1:3000}"
 curl -fsS "$api_base/api/client/analysis" | python3 -c \
   'import json,sys; rows=json.load(sys.stdin)["clients"]; assert len(rows)>=10; print(f"Snapshot API: {len(rows)} clients")'
 curl -fsS -X POST "$api_base/api/client/snapshot" -H 'Content-Type: application/json' \
-  --data '{"weights":{"balance":35,"renewal":25,"autoRenew":15,"status":15,"transactions":10},"mediumThreshold":35,"highThreshold":65,"renewalWindowDays":14}' \
+  --data '{"weights":{"paymentCoverage":35,"noAutoProlong":15,"prolongWait":15,"failedProlong":10,"expiringRevenue":25},"mediumThreshold":35,"highThreshold":65,"renewalWindowDays":14}' \
   | python3 -c 'import json,sys; rows=json.load(sys.stdin); assert len(rows)>=10 and all(0<=r["score"]<=100 for r in rows); print(f"Risk Score API: {len(rows)} clients")'
 curl -fsS "$api_base/api/client/historical/-8999999" | python3 -c \
   'import json,sys; rows=json.load(sys.stdin); assert len(rows)>=60; print(f"Historical API: {len(rows)} days for fixture account")'
+curl -fsS "$api_base/api/client/historical/patterns" | python3 -c \
+  'import json,sys; rows=json.load(sys.stdin); assert isinstance(rows,list); assert all(row["support"]>=2 and row["support"]==len(row["clientIds"]) for row in rows); print(f"Sequence discovery API: {len(rows)} repeated patterns")'
 
 python3 scripts/check_frontend_models.py "${FRONTEND_BASE_URL:-http://127.0.0.1:${FRONTEND_PORT:-8080}}"

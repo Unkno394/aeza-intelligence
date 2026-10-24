@@ -25,6 +25,7 @@ fn welford_tracks_sample_variance_without_history() {
 #[test]
 fn an_established_new_norm_stops_being_unusual() {
     let config = HistoricalConfig {
+        expected_features: ["servers".to_owned()].into(),
         short_half_life_ms: DAY as f64,
         long_half_life_ms: (3 * DAY) as f64,
         minimum_observations: 5,
@@ -55,6 +56,7 @@ fn an_established_new_norm_stops_being_unusual() {
 #[test]
 fn short_and_long_norms_expose_gradual_contraction() {
     let config = HistoricalConfig {
+        expected_features: ["servers".to_owned()].into(),
         short_half_life_ms: DAY as f64,
         long_half_life_ms: (30 * DAY) as f64,
         ..HistoricalConfig::default()
@@ -76,6 +78,7 @@ fn short_and_long_norms_expose_gradual_contraction() {
 #[test]
 fn sparse_history_does_not_make_confident_claims() {
     let config = HistoricalConfig {
+        expected_features: ["servers".to_owned()].into(),
         minimum_observations: 5,
         minimum_history_ms: 4 * DAY,
         ..HistoricalConfig::default()
@@ -141,8 +144,12 @@ fn an_unpaid_service_is_overdue_before_it_recovers() {
 
 #[test]
 fn the_same_wait_can_be_familiar_for_one_customer_and_new_for_another() {
-    let mut habitual_late_payer = HistoricalModel::default();
-    let mut habitual_on_time_payer = HistoricalModel::default();
+    let config = HistoricalConfig {
+        minimum_history_ms: 4 * DAY,
+        ..HistoricalConfig::default()
+    };
+    let mut habitual_late_payer = HistoricalModel::new(config.clone());
+    let mut habitual_on_time_payer = HistoricalModel::new(config);
     let empty = BTreeMap::new();
     for day in 0..5 {
         let start = day * DAY;
@@ -170,8 +177,81 @@ fn the_same_wait_can_be_familiar_for_one_customer_and_new_for_another() {
 }
 
 #[test]
+fn personal_sequence_change_is_explained_against_the_same_customer_history() {
+    let mut model = HistoricalModel::default();
+    let empty = BTreeMap::new();
+    let established = [
+        (0, "active"),
+        (DAY, "prolong_wait"),
+        (2 * DAY, "active"),
+        (4 * DAY, "prolong_wait"),
+        (5 * DAY, "active"),
+        (7 * DAY, "prolong_wait"),
+        (8 * DAY, "active"),
+        (10 * DAY, "prolong_wait"),
+        (11 * DAY, "active"),
+    ];
+    for (timestamp, kind) in established {
+        model.observe_with_event(
+            timestamp,
+            &empty,
+            Some(BehaviorEvent {
+                stream_id: "service-a",
+                kind,
+            }),
+        );
+    }
+
+    let mut regular = HistoricalModel::from_json(&model.to_json().unwrap()).unwrap();
+    let familiar_cycle = regular.observe_with_event(
+        40 * DAY,
+        &empty,
+        Some(BehaviorEvent {
+            stream_id: "service-a",
+            kind: "prolong_wait",
+        }),
+    );
+    let familiar_sequence = familiar_cycle
+        .personal_sequence_deviations
+        .first()
+        .expect("the model should compare the cycle with its own prior windows");
+    assert!(!familiar_sequence.is_unusual);
+    assert_eq!(familiar_sequence.similarity, Some(1.0));
+
+    let changed = model.observe_with_event(
+        40 * DAY,
+        &empty,
+        Some(BehaviorEvent {
+            stream_id: "service-a",
+            kind: "suspended",
+        }),
+    );
+    let deviation = changed
+        .personal_sequence_deviations
+        .iter()
+        .find(|deviation| deviation.stream_id == "service-a")
+        .expect("there should be a comparison with the customer's own sequence");
+    assert!(changed.is_confident);
+    assert!(changed.is_unusual);
+    assert!(deviation.is_unusual);
+    assert_eq!(deviation.observed, ["prolong_wait", "active", "suspended"]);
+    assert!(
+        deviation
+            .similarity
+            .is_some_and(|similarity| similarity < 0.8)
+    );
+    assert!(
+        changed
+            .anomaly_reasons
+            .iter()
+            .any(|reason| reason.kind == "personal_sequence")
+    );
+}
+
+#[test]
 fn event_only_updates_do_not_reduce_snapshot_familiarity() {
     let config = HistoricalConfig {
+        expected_features: ["servers".to_owned()].into(),
         minimum_observations: 2,
         minimum_history_ms: DAY,
         ..HistoricalConfig::default()
@@ -213,6 +293,38 @@ fn compact_profile_survives_restart_without_replaying_history() {
     );
     let recovery = restored.observe(DAY + 4 * HOUR, &servers(9.0), Some("active"));
     assert_eq!(recovery.transition.unwrap().elapsed_ms, 4 * HOUR);
+    assert_eq!(
+        restored.recent_event_sequences(),
+        vec![vec![
+            "active".to_owned(),
+            "prolong_wait".to_owned(),
+            "active".to_owned()
+        ]]
+    );
+}
+
+#[test]
+fn legacy_model_state_upgrades_while_preserving_the_existing_profile() {
+    let mut model = HistoricalModel::default();
+    model.observe(0, &servers(10.0), Some("active"));
+    model.observe(DAY, &servers(9.0), Some("prolong_wait"));
+    let mut legacy: serde_json::Value = serde_json::from_str(&model.to_json().unwrap()).unwrap();
+    legacy["model_version"] = serde_json::json!(2);
+    legacy.as_object_mut().unwrap().remove("event_sequences");
+
+    let upgraded = HistoricalModel::from_json(&legacy.to_string()).unwrap();
+    let saved: serde_json::Value = serde_json::from_str(&upgraded.to_json().unwrap()).unwrap();
+    assert_eq!(saved["model_version"], serde_json::json!(3));
+    assert_eq!(
+        upgraded
+            .behavior_graph()
+            .transition_count("active", "prolong_wait"),
+        1
+    );
+    assert_eq!(
+        upgraded.behavior_embedding()["servers"].lifetime().count(),
+        2
+    );
 }
 
 #[test]

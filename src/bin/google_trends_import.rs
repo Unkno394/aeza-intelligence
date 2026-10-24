@@ -19,8 +19,6 @@ const BRANDS: &[(&str, &str)] = &[
     ("timeweb_cloud", "Timeweb Cloud"),
     ("selectel", "Selectel"),
 ];
-const SEARCH_SCHEMA: &str = include_str!("../../migrations/002_search_interest.sql");
-const GEO_SCHEMA: &str = include_str!("../../migrations/004_search_geography.sql");
 
 #[derive(Parser)]
 #[command(about = "Import comparable 5-year Google Trends Explore data for five VPS brands")]
@@ -90,8 +88,9 @@ async fn main() -> Result<()> {
         .max_connections(2)
         .connect(&database_url)
         .await?;
-    sqlx::raw_sql(SEARCH_SCHEMA).execute(&pool).await?;
-    sqlx::raw_sql(GEO_SCHEMA).execute(&pool).await?;
+    aeza_intelligence::PgAdapter::from_pool(pool.clone())
+        .migrate()
+        .await?;
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM market_intelligence.search_interest WHERE source = $1")
         .bind(SOURCE)
@@ -99,8 +98,8 @@ async fn main() -> Result<()> {
         .await?;
     for point in &points {
         for (index, (code, _)) in BRANDS.iter().enumerate() {
-            sqlx::query("INSERT INTO market_intelligence.search_interest (brand_code, source, observed_on, score) VALUES ($1, $2, $3, $4)")
-                .bind(*code).bind(SOURCE).bind(point.date).bind(point.scores[index])
+            sqlx::query("INSERT INTO market_intelligence.search_interest (brand_code, source, comparison_group, observed_on, score) VALUES ($1, $2, $3, $4, $5)")
+                .bind(*code).bind(SOURCE).bind("google-trends-joint:5y").bind(point.date).bind(point.scores[index])
                 .execute(&mut *tx).await?;
         }
     }

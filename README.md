@@ -25,9 +25,9 @@ the application containers; the existing database remains in place.
 ## Inputs
 
 - Pass a numeric feature map to `HistoricalModel::observe` for each customer
-  snapshot. Useful feature names include `server_count`, `monthly_spend`,
-  `financial_runway_days`, and `autorenew_disabled_share`. Keep each feature's
-  units consistent over time.
+  snapshot. The PostgreSQL collector records service count, monthly spend,
+  spendable balance, payment coverage, upcoming payments and the four Snapshot
+  risk shares. Keep each feature's units consistent over time.
 - Pass real lifecycle or payment events with `observe_with_event`. Use the
   service ID as `stream_id` so transitions from separate services are not
   joined. An event-only update can use an empty feature map.
@@ -71,9 +71,11 @@ Ok(())
 
 ## Interpretation
 
-`familiarity` uses snapshot count, history duration, and completeness.
-`event_familiarity` uses relevant transition history. Low familiarity prevents
-the model from making a confident claim. `is_unusual` means a customer's
+`familiarity` uses snapshot count, history duration, and completeness. The
+default model requires ten complete snapshots spanning 30 days before it makes
+confident metric claims. `event_familiarity` uses repeated transitions and their
+history span. Low familiarity prevents the model from making a confident claim.
+`is_unusual` means a customer's
 current behavior differs from their own history; it is not a churn probability.
 The Snapshot Model remains the source for current-state risk, especially when
 the historical profile is still sparse.
@@ -86,13 +88,20 @@ direction of gradual changes such as declining server count. The graph records
 transition frequency and elapsed time. Watched states such as `prolong_wait`
 are checked for unusually long waits before a recovery event occurs.
 
-`lcs_similarity` compares event sequences with a supplied pattern. It only
-reports sequence similarity; pattern labels and their relationship to churn
-must come from separate evidence.
+LCS compares each service's recent event sequence with the same customer's prior
+windows and with other customers. A bounded-gap frequent-subsequence miner groups
+similar sequences and reports only patterns supported by at least two customers;
+it does not require a hand-written template. The Historical page also explains
+feature and transition anomalies, their personal baseline, and the first
+consecutive snapshot or event where the deviation appeared. Similarity describes
+sequence shape; it does not establish churn or causation.
 
 The library provides JSON export and import for historical profiles. The
-PostgreSQL adapter loads customer datasets and computes current risk features;
-`client_snapshot` persists daily historical assessments in PostgreSQL.
+PostgreSQL adapter loads customer datasets and computes current risk features.
+`client_snapshot` persists daily model state and assessments, consumes service
+and renewal changes from `operation_logs`, and infers expiry events between
+daily snapshots. The first run establishes the event-log starting point; old
+seed operations are not replayed as customer behavior.
 
 ## Market Intelligence
 
@@ -113,15 +122,18 @@ UTC days for one fixture account with `--as-of`, then opens
 Dashboard, Snapshot and Historical in headless Chromium and compares their
 Risk Score with the Rust API.
 Existing positive client IDs and identity sequences remain unchanged. The
-script refuses to reuse a negative ID owned by a non-fixture record. The
-Snapshot page requests its Risk Score from `POST /api/client/snapshot`; the
-Historical page reads persisted daily state.
+script refuses to reuse a negative ID owned by a non-fixture record. Snapshot
+requests its five-feature Risk Score from `POST /api/client/snapshot` and the
+cross-client robust analysis from `GET /api/client/analysis`. Historical reads
+persisted daily state and compares recent sequences through
+`GET /api/client/historical/{id}/sequence-peers`. Automatically discovered
+cross-customer patterns are served by `GET /api/client/historical/patterns`.
 
 ### One PostgreSQL database
 
 Set `DATABASE_URL` in `.env` to the existing `aeza_intelligence` database and
 run `bash scripts/migrate_database.sh`. This applies the market migrations
-(`001`–`004`) and the customer adapter migrations (`100`–`108`) to that same
+(`001`–`004`) and the customer adapter migrations (`100`–`110`) to that same
 database. Customer tables live in `public`; market tables live in
 `market_intelligence`. The script verifies that all required tables exist and
 prints row counts. It does not create or replace a database. Docker Compose
@@ -136,7 +148,9 @@ the migration to stop with an explicit error for inspection.
 Outside Docker, start the API with `cargo run --bin market_api`. It listens on
 `127.0.0.1:3000`; the Vite frontend proxies `/api` there. The API serves
 `/api/client/dataset`, `/api/client/analysis`,
-`/api/client/historical/{id}`, and the three `/api/market/*` routes.
+`/api/client/historical/{id}`, `/api/client/historical/{id}/sequence-peers`,
+`/api/client/historical/patterns`,
+and the three `/api/market/*` routes.
 For a one-time snapshot run, use `cargo run --bin client_snapshot` after
 loading `.env`. Run `bash scripts/check_api.sh` to print response counts.
 Client data is read-only in the frontend; personal model settings are stored
@@ -147,9 +161,9 @@ Existing market rows remain in place. The migration runner records applied
 versions in `_sqlx_migrations` so repeated runs skip completed migrations.
 
 The [Wayback collector](docs/market-intelligence-wayback.md) and
-[PostgreSQL migration](migrations/001_market_intelligence.sql) support four
-providers and three tables in the existing database. A database connection is
-required to apply the migration and verify persisted observations.
+[PostgreSQL migration](migrations/001_market_intelligence.sql) store current
+and archived tariffs in the existing database. A database connection is
+required to verify persisted observations.
 
 ### Search interest
 
@@ -169,6 +183,9 @@ all six brands due for refresh and prints row counts. The scheduler can run
 with `cargo run --bin search_interest -- schedule` for weekly updates.
 Individual scores are normalized separately, so the page compares changes
 within each brand rather than ranking score levels between brands.
+The `comparison_group` column records each TrendsMCP keyword as a separate
+scale. The paired five-brand Google Trends import uses one shared group;
+`GET /api/market/search-interest/comparison` serves only that joint series.
 
 Google Trends Explore CSV import remains an optional path for a joint
 comparison and geography. Its automated web endpoint is rate-limited (429).
@@ -207,13 +224,41 @@ cargo run --bin market_fx
 For an HTTP and JSON check without PostgreSQL, run
 `cargo run --bin market_fx -- --dry-run --date 2025-10-01`.
 
-This applies `migrations/003_exchange_rates.sql`, fetches missing EUR/RUB
+This applies pending migrations, fetches missing EUR/RUB and USD/RUB
 rates from Frankfurter without an API key, and exposes
 `market_intelligence.tariff_prices_rub`. The view retains the original
 `price_minor` and `currency`, and adds `price_rub_minor`, `rub_rate`, and
 `rub_rate_on`. RUB prices use rate 1. Missing historical rates leave the
 converted price `NULL`; the importer reports failed dates. Compare prices
 only for equivalent billing periods and VAT treatment.
+
+### Tariff identity, quality, and financial journal
+
+`market_intelligence.tariff_products.id` is the stable plan identity across
+configuration versions and price observations. `public.services.tariff_product_id`
+links an Aéza service to its plan; renewals inherit the link through
+`transactions.serviceId`. Existing services are linked only when their names
+exactly match an Aéza plan key. The API reports unlinked services so billing
+product IDs can be mapped explicitly instead of guessed.
+
+The signed simulator catalog supplies 80 available Aéza offers. Import it with
+`cargo run --bin market_import -- aeza-snapshot` or check the signature without
+a database using `cargo run --bin market_import -- aeza-snapshot --dry-run`.
+Docker's market collector imports the same catalog before scraping competitors.
+Normalized CPU, RAM, disk, region, traffic and known price conditions are
+stored alongside the source excerpt. Exact price medians require matching
+resource, region, traffic and VAT fields; missing fields remain unknown.
+
+`GET /api/market/prices/quality` reports coverage and missing FX rates.
+`GET /api/client/data-quality` reports real-client snapshot coverage, missing
+plan links and recent behavior events. `GET /api/client/financial-ledger/{id}`
+shows performed service charges and increases in `totalReplenished` recorded
+as topups. The current billing schema has no explicit refund type; a real
+refund feed is required before refunds can be classified.
+
+With PostgreSQL and network access available on the host, run
+`bash scripts/check_market_live.sh`. It applies migrations, imports the Aéza
+catalog, collects Contabo, fetches FX, then checks the price and quality APIs.
 
 ### Run and verify the system
 
