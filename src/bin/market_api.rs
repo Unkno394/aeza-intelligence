@@ -1,4 +1,9 @@
-use std::net::SocketAddr;
+use std::{
+    collections::BTreeMap,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use aeza_intelligence::{
     PgAdapter,
@@ -10,14 +15,26 @@ use aeza_intelligence::{
 use anyhow::Result;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{
+        FromRef, Path, State,
+        ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
+    },
     http::StatusCode,
+    response::Response,
     routing::{get, post},
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use tokio::sync::{Mutex, broadcast};
+
+/// How often the live channel checks operation_logs for client data changes.
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Scores depend on the current time (renewal window), so they are recalculated
+/// at least this often even without data changes.
+const RESCORE_INTERVAL: Duration = Duration::from_secs(60);
+const PING_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Parser)]
 struct Cli {
@@ -246,16 +263,62 @@ struct SequencePeer {
     sequence: Vec<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SnapshotSettings {
     weights: SnapshotWeights,
     medium_threshold: i64,
     high_threshold: i64,
     renewal_window_days: i64,
+    /// Used only by the frontend Historical page; stored with the other settings.
+    #[serde(default = "default_historical_min_days")]
+    historical_min_days: i64,
 }
 
-#[derive(Deserialize)]
+fn default_historical_min_days() -> i64 {
+    30
+}
+
+impl Default for SnapshotSettings {
+    fn default() -> Self {
+        Self {
+            weights: SnapshotWeights {
+                payment_coverage: 35.0,
+                no_auto_prolong: 15.0,
+                prolong_wait: 15.0,
+                failed_prolong: 10.0,
+                expiring_revenue: 25.0,
+            },
+            medium_threshold: 35,
+            high_threshold: 65,
+            renewal_window_days: 14,
+            historical_min_days: default_historical_min_days(),
+        }
+    }
+}
+
+impl SnapshotSettings {
+    fn is_valid(&self) -> bool {
+        let weights = &self.weights;
+        let all = [
+            weights.payment_coverage,
+            weights.no_auto_prolong,
+            weights.prolong_wait,
+            weights.failed_prolong,
+            weights.expiring_revenue,
+        ];
+        all.iter()
+            .all(|weight| weight.is_finite() && *weight >= 0.0)
+            && all.iter().sum::<f64>() > 0.0
+            && (1..=90).contains(&self.renewal_window_days)
+            && (1..=100).contains(&self.medium_threshold)
+            && self.high_threshold > self.medium_threshold
+            && self.high_threshold <= 100
+            && (7..=365).contains(&self.historical_min_days)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SnapshotWeights {
     payment_coverage: f64,
@@ -265,7 +328,7 @@ struct SnapshotWeights {
     expiring_revenue: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct SnapshotRisk {
     account_id: String,
@@ -279,7 +342,7 @@ struct SnapshotRisk {
     payment_coverage: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq)]
 struct SnapshotFactor {
     key: &'static str,
     label: &'static str,
@@ -298,6 +361,7 @@ async fn main() -> Result<()> {
         .connect(&cli.database_url)
         .await?;
     PgAdapter::from_pool(pool.clone()).migrate().await?;
+    let live = Live::start(pool.clone()).await?;
     let app = Router::new()
         .route("/api/market/search-interest", get(search_interest))
         .route(
@@ -328,21 +392,328 @@ async fn main() -> Result<()> {
             "/api/client/historical/patterns",
             get(discovered_sequence_patterns),
         )
-        .with_state(pool);
+        .route("/api/client/ws", get(live_socket))
+        .with_state(AppState { pool, live });
     let listener = tokio::net::TcpListener::bind(cli.listen).await?;
     eprintln!("market API listening on http://{}", cli.listen);
     axum::serve(listener, app).await?;
     Ok(())
 }
 
+#[derive(Clone)]
+struct AppState {
+    pool: PgPool,
+    live: Arc<Live>,
+}
+
+impl FromRef<AppState> for PgPool {
+    fn from_ref(state: &AppState) -> Self {
+        state.pool.clone()
+    }
+}
+
+/// Messages pushed to frontend sessions over /api/client/ws.
+#[derive(Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum ServerMessage<'a> {
+    /// Full state, sent on connect and after a session falls behind the broadcast.
+    Snapshot {
+        dataset: &'a ClientDataset,
+        settings: &'a SnapshotSettings,
+        risks: Vec<&'a SnapshotRisk>,
+    },
+    /// Accounts, services or transactions changed.
+    Dataset {
+        dataset: &'a ClientDataset,
+    },
+    Settings {
+        settings: &'a SnapshotSettings,
+    },
+    /// Only the accounts whose Risk Score changed.
+    Scores {
+        changed: Vec<&'a SnapshotRisk>,
+        removed: Vec<&'a str>,
+    },
+    Ack {
+        request_id: &'a str,
+    },
+    Error {
+        request_id: Option<&'a str>,
+        message: &'a str,
+    },
+}
+
+/// Messages a frontend session sends over /api/client/ws.
+#[derive(Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum ClientMessage {
+    UpdateSettings {
+        request_id: String,
+        settings: SnapshotSettings,
+    },
+}
+
+fn encode(message: &ServerMessage) -> Utf8Bytes {
+    serde_json::to_string(message)
+        .expect("server messages always serialize")
+        .into()
+}
+
+type Risks = BTreeMap<String, SnapshotRisk>;
+
+/// Accounts whose risk differs between `old` and `new`, and accounts gone from `new`.
+fn score_changes<'a>(old: &'a Risks, new: &'a Risks) -> (Vec<&'a SnapshotRisk>, Vec<&'a str>) {
+    let changed = new
+        .values()
+        .filter(|risk| old.get(&risk.account_id) != Some(*risk))
+        .collect();
+    let removed = old
+        .keys()
+        .filter(|id| !new.contains_key(*id))
+        .map(String::as_str)
+        .collect();
+    (changed, removed)
+}
+
+/// Shared client state for every WebSocket session: the latest dataset, the
+/// settings and the Risk Score per account. Changes are broadcast as encoded
+/// messages.
+struct Live {
+    events: broadcast::Sender<Utf8Bytes>,
+    state: Mutex<LiveState>,
+}
+
+struct LiveState {
+    settings: SnapshotSettings,
+    dataset: ClientDataset,
+    risks: Risks,
+    /// Latest operation_logs id: every write to the client tables appends a row.
+    log_id: Option<i64>,
+}
+
+impl Live {
+    async fn start(pool: PgPool) -> Result<Arc<Self>> {
+        let settings = load_settings(&pool).await?;
+        let log_id = last_log_id(&pool).await?;
+        let dataset = load_dataset(&pool).await?;
+        let risks = load_risks(&pool, &settings).await?;
+        let live = Arc::new(Self {
+            events: broadcast::channel(64).0,
+            state: Mutex::new(LiveState {
+                settings,
+                dataset,
+                risks,
+                log_id,
+            }),
+        });
+        tokio::spawn(live.clone().watch(pool));
+        Ok(live)
+    }
+
+    async fn watch(self: Arc<Self>, pool: PgPool) {
+        let mut tick = tokio::time::interval(POLL_INTERVAL);
+        let mut rescored = Instant::now();
+        loop {
+            tick.tick().await;
+            match self
+                .refresh(&pool, rescored.elapsed() >= RESCORE_INTERVAL)
+                .await
+            {
+                Ok(true) => rescored = Instant::now(),
+                Ok(false) => {}
+                Err(error) => eprintln!("live refresh failed: {error:#}"),
+            }
+        }
+    }
+
+    /// Reloads the dataset and scores when client data changed (scores alone
+    /// when `rescore` is set) and broadcasts what differs. Returns whether
+    /// scores were recalculated.
+    async fn refresh(&self, pool: &PgPool, rescore: bool) -> Result<bool> {
+        let log_id = last_log_id(pool).await?;
+        let mut state = self.state.lock().await;
+        let changed = log_id != state.log_id;
+        if !changed && !rescore {
+            return Ok(false);
+        }
+        if changed {
+            state.dataset = load_dataset(pool).await?;
+            state.log_id = log_id;
+            self.publish(&ServerMessage::Dataset {
+                dataset: &state.dataset,
+            });
+        }
+        let risks = load_risks(pool, &state.settings).await?;
+        self.replace_risks(&mut state, risks);
+        Ok(true)
+    }
+
+    fn replace_risks(&self, state: &mut LiveState, risks: Risks) {
+        let (changed, removed) = score_changes(&state.risks, &risks);
+        if !changed.is_empty() || !removed.is_empty() {
+            self.publish(&ServerMessage::Scores { changed, removed });
+        }
+        state.risks = risks;
+    }
+
+    async fn update_settings(
+        &self,
+        pool: &PgPool,
+        settings: SnapshotSettings,
+    ) -> Result<(), &'static str> {
+        if !settings.is_valid() {
+            return Err("Некорректные настройки");
+        }
+        // Held across the writes so concurrent updates reach the database and
+        // the sessions in the same order.
+        let mut state = self.state.lock().await;
+        let risks = load_risks(pool, &settings).await.map_err(|error| {
+            eprintln!("risk calculation for new settings failed: {error:#}");
+            "Не удалось пересчитать Risk Score"
+        })?;
+        save_settings(pool, &settings).await.map_err(|error| {
+            eprintln!("saving client settings failed: {error}");
+            "Не удалось сохранить настройки"
+        })?;
+        state.settings = settings;
+        self.publish(&ServerMessage::Settings {
+            settings: &state.settings,
+        });
+        self.replace_risks(&mut state, risks);
+        Ok(())
+    }
+
+    async fn snapshot(&self) -> Utf8Bytes {
+        let state = self.state.lock().await;
+        encode(&ServerMessage::Snapshot {
+            dataset: &state.dataset,
+            settings: &state.settings,
+            risks: state.risks.values().collect(),
+        })
+    }
+
+    async fn handle(&self, pool: &PgPool, text: &str) -> Utf8Bytes {
+        match serde_json::from_str::<ClientMessage>(text) {
+            Ok(ClientMessage::UpdateSettings {
+                request_id,
+                settings,
+            }) => match self.update_settings(pool, settings).await {
+                Ok(()) => encode(&ServerMessage::Ack {
+                    request_id: &request_id,
+                }),
+                Err(message) => encode(&ServerMessage::Error {
+                    request_id: Some(&request_id),
+                    message,
+                }),
+            },
+            Err(_) => encode(&ServerMessage::Error {
+                request_id: None,
+                message: "Некорректное сообщение",
+            }),
+        }
+    }
+
+    fn publish(&self, message: &ServerMessage) {
+        // Fails only when no session is connected.
+        let _ = self.events.send(encode(message));
+    }
+}
+
+async fn live_socket(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+    ws.on_upgrade(move |socket| serve_socket(socket, state))
+}
+
+async fn serve_socket(mut socket: WebSocket, state: AppState) {
+    // Subscribe before taking the snapshot so no change falls between them.
+    let mut events = state.live.events.subscribe();
+    if socket
+        .send(Message::Text(state.live.snapshot().await))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let mut ping =
+        tokio::time::interval_at(tokio::time::Instant::now() + PING_INTERVAL, PING_INTERVAL);
+    loop {
+        let reply = tokio::select! {
+            event = events.recv() => match event {
+                Ok(text) => text,
+                Err(broadcast::error::RecvError::Lagged(_)) => state.live.snapshot().await,
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+            incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Text(text))) => state.live.handle(&state.pool, &text).await,
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(_)) => continue,
+            },
+            _ = ping.tick() => {
+                if socket.send(Message::Ping(Default::default())).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+        };
+        if socket.send(Message::Text(reply)).await.is_err() {
+            break;
+        }
+    }
+}
+
+async fn load_settings(pool: &PgPool) -> Result<SnapshotSettings, sqlx::Error> {
+    let stored: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT settings FROM public.client_settings WHERE id")
+            .fetch_optional(pool)
+            .await?;
+    Ok(stored
+        .and_then(
+            |value| match serde_json::from_value::<SnapshotSettings>(value) {
+                Ok(settings) if settings.is_valid() => Some(settings),
+                _ => {
+                    eprintln!("stored client settings are invalid, using defaults");
+                    None
+                }
+            },
+        )
+        .unwrap_or_default())
+}
+
+async fn save_settings(pool: &PgPool, settings: &SnapshotSettings) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO public.client_settings (id, settings) VALUES (true, $1) \
+         ON CONFLICT (id) DO UPDATE SET settings = excluded.settings, updated_at = now()",
+    )
+    .bind(serde_json::to_value(settings).expect("settings always serialize"))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn last_log_id(pool: &PgPool) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar("SELECT max(id) FROM public.operation_logs")
+        .fetch_one(pool)
+        .await
+}
+
 async fn client_dataset(State(pool): State<PgPool>) -> Result<Json<ClientDataset>, StatusCode> {
+    load_dataset(&pool).await.map(Json).map_err(db_error)
+}
+
+async fn load_dataset(pool: &PgPool) -> Result<ClientDataset, sqlx::Error> {
     let account_rows = sqlx::query(
         "SELECT id::bigint AS id, email, balance, \"totalReplenished\" \
          FROM public.accounts ORDER BY id",
     )
-    .fetch_all(&pool)
-    .await
-    .map_err(db_error)?;
+    .fetch_all(pool)
+    .await?;
     let service_rows = sqlx::query(
         "SELECT s.id::bigint AS id, s.\"ownerId\"::bigint AS owner_id, s.name, \
          s.tariff_product_id::bigint AS tariff_product_id, product.plan_key AS tariff_plan_key, \
@@ -356,9 +727,8 @@ async fn client_dataset(State(pool): State<PgPool>) -> Result<Json<ClientDataset
              WHERE t.product_id = product.id ORDER BY t.first_observed_at DESC LIMIT 1) tariff ON true \
          ORDER BY s.id",
     )
-    .fetch_all(&pool)
-    .await
-    .map_err(db_error)?;
+    .fetch_all(pool)
+    .await?;
     let transaction_rows = sqlx::query(
         "SELECT t.id::bigint AS id, s.\"ownerId\"::bigint AS owner_id, \
          t.\"serviceId\"::bigint AS service_id, t.amount::bigint AS amount, \
@@ -366,9 +736,8 @@ async fn client_dataset(State(pool): State<PgPool>) -> Result<Json<ClientDataset
          t.type::text AS type, t.status::text AS status, t.\"createdAt\" \
          FROM public.transactions t JOIN public.services s ON s.id = t.\"serviceId\" ORDER BY t.id",
     )
-    .fetch_all(&pool)
-    .await
-    .map_err(db_error)?;
+    .fetch_all(pool)
+    .await?;
     let accounts = account_rows
         .into_iter()
         .map(|row| {
@@ -433,13 +802,13 @@ async fn client_dataset(State(pool): State<PgPool>) -> Result<Json<ClientDataset
             }
         })
         .collect();
-    Ok(Json(ClientDataset {
+    Ok(ClientDataset {
         accounts,
         services,
         transactions,
         as_of: Utc::now(),
         snapshots: Vec::new(),
-    }))
+    })
 }
 
 async fn financial_ledger(
@@ -532,58 +901,45 @@ async fn client_snapshot_risks(
     State(pool): State<PgPool>,
     Json(settings): Json<SnapshotSettings>,
 ) -> Result<Json<Vec<SnapshotRisk>>, StatusCode> {
-    let weights = &settings.weights;
-    let all = [
-        weights.payment_coverage,
-        weights.no_auto_prolong,
-        weights.prolong_wait,
-        weights.failed_prolong,
-        weights.expiring_revenue,
-    ];
-    if all
-        .iter()
-        .any(|weight| !weight.is_finite() || *weight < 0.0)
-        || all.iter().sum::<f64>() <= 0.0
-        || !(1..=90).contains(&settings.renewal_window_days)
-        || !(1..=100).contains(&settings.medium_threshold)
-        || settings.high_threshold <= settings.medium_threshold
-        || settings.high_threshold > 100
-    {
+    if !settings.is_valid() {
         return Err(StatusCode::BAD_REQUEST);
     }
+    let risks = load_risks(&pool, &settings).await.map_err(|error| {
+        eprintln!("snapshot risk query failed: {error:#}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(Json(risks.into_values().collect()))
+}
+
+/// Risk Score of every client at the current moment, keyed by account ID.
+async fn load_risks(pool: &PgPool, settings: &SnapshotSettings) -> Result<Risks> {
     let horizon = format!("{} days", settings.renewal_window_days);
     let clients = PgAdapter::from_pool(pool.clone())
         .client_features(Utc::now(), &horizon)
-        .await
-        .map_err(|error| {
-            eprintln!("snapshot risk feature query failed: {error}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .await?;
     let replenished_rows = sqlx::query(
         "SELECT id::bigint AS id, \"totalReplenished\" AS total_replenished FROM public.accounts",
     )
-    .fetch_all(&pool)
-    .await
-    .map_err(db_error)?;
-    let replenished: std::collections::BTreeMap<i64, i64> = replenished_rows
+    .fetch_all(pool)
+    .await?;
+    let replenished: BTreeMap<i64, i64> = replenished_rows
         .into_iter()
         .map(|row| (row.get("id"), row.get("total_replenished")))
         .collect();
-    Ok(Json(
-        clients
-            .iter()
-            .map(|client| {
-                calculate_snapshot_risk(
-                    client,
-                    replenished
-                        .get(&client.account_id)
-                        .copied()
-                        .unwrap_or_default(),
-                    &settings,
-                )
-            })
-            .collect(),
-    ))
+    Ok(clients
+        .iter()
+        .map(|client| {
+            let risk = calculate_snapshot_risk(
+                client,
+                replenished
+                    .get(&client.account_id)
+                    .copied()
+                    .unwrap_or_default(),
+                settings,
+            );
+            (risk.account_id.clone(), risk)
+        })
+        .collect())
 }
 
 fn calculate_snapshot_risk(
@@ -1081,6 +1437,65 @@ mod tests {
         let json = serde_json::to_value(&risk).unwrap();
         assert_eq!(json["upcomingCents"], 1000);
         assert_eq!(json["accountId"], "1");
+    }
+
+    #[test]
+    fn live_messages_use_frontend_field_names() {
+        let message: ClientMessage = serde_json::from_str(r#"{"type":"updateSettings","requestId":"7","settings":{"weights":{"paymentCoverage":1,"noAutoProlong":1,"prolongWait":1,"failedProlong":1,"expiringRevenue":1},"mediumThreshold":40,"highThreshold":70,"renewalWindowDays":7,"historicalMinDays":30}}"#).unwrap();
+        let ClientMessage::UpdateSettings {
+            request_id,
+            settings,
+        } = message;
+        assert_eq!(request_id, "7");
+        assert!(settings.is_valid());
+        let ack: serde_json::Value =
+            serde_json::from_str(encode(&ServerMessage::Ack { request_id: "7" }).as_str()).unwrap();
+        assert_eq!(ack, serde_json::json!({"type": "ack", "requestId": "7"}));
+        let defaults = serde_json::to_value(SnapshotSettings::default()).unwrap();
+        assert_eq!(defaults["weights"]["paymentCoverage"], 35.0);
+        assert_eq!(defaults["historicalMinDays"], 30);
+        assert!(SnapshotSettings::default().is_valid());
+    }
+
+    #[test]
+    fn score_changes_lists_only_changed_and_removed_accounts() {
+        let client = |account_id, no_auto_prolong_share| ClientFeatures {
+            account_id,
+            email: format!("{account_id}@example.test"),
+            services_count: 1,
+            monthly_spend: 1000.0,
+            short_term_share: Some(0.0),
+            no_auto_prolong_share: Some(no_auto_prolong_share),
+            prolong_wait_share: Some(0.0),
+            failed_prolong_share: Some(0.0),
+            expiring_revenue_share: Some(0.0),
+            upcoming_payments: 0,
+            spendable_balance: 0,
+            payment_coverage: 10.0,
+        };
+        let settings = SnapshotSettings::default();
+        let risks = |clients: &[ClientFeatures]| -> Risks {
+            clients
+                .iter()
+                .map(|client| {
+                    let risk = calculate_snapshot_risk(client, 0, &settings);
+                    (risk.account_id.clone(), risk)
+                })
+                .collect()
+        };
+        let old = risks(&[client(1, 0.0), client(2, 0.0), client(3, 0.0)]);
+        let new = risks(&[client(1, 0.0), client(2, 1.0)]);
+        let (changed, removed) = score_changes(&old, &new);
+        assert_eq!(
+            changed
+                .iter()
+                .map(|risk| risk.account_id.as_str())
+                .collect::<Vec<_>>(),
+            ["2"]
+        );
+        assert_eq!(removed, ["3"]);
+        let (changed, removed) = score_changes(&new, &new);
+        assert!(changed.is_empty() && removed.is_empty());
     }
 
     #[test]
