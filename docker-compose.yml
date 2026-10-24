@@ -40,6 +40,17 @@ services:
     restart: unless-stopped
     entrypoint: ["market_api"]
     command: ["--listen", "0.0.0.0:3000"]
+    # OIDC login; see .env.example. The API refuses to start without it unless
+    # AUTH_DISABLED=true.
+    environment:
+      DATABASE_URL: *database-url
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
+      PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:${FRONTEND_PORT:-8080}}
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+      AUTH_DISABLED: ${AUTH_DISABLED:-false}
 
   snapshots:
     <<: *app

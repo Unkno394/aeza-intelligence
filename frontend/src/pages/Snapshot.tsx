@@ -15,7 +15,7 @@ const metric=(feature:string,value:number|null|undefined)=>value==null?'нет �
 const deviation=(value:number|undefined)=>value==null?'—':`${value>0?'+':''}${value.toFixed(2)} MAD`;
 
 export default function Snapshot(){
- const {data,settings,risks,riskError}=useAnalyzer();
+ const {data,settings,risks}=useAnalyzer();
  const [params,setParams]=useSearchParams();
  const [rustReport,setRustReport]=useState<RustReport|null>(null);
  const [rustError,setRustError]=useState('');
@@ -47,7 +47,7 @@ export default function Snapshot(){
  const risk=risks?.[account.id];
  const services=data.services.filter(s=>s.accountId===account.id);
  const transactions=data.transactions.filter(t=>t.accountId===account.id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
- if(!risk)return <div className="market-state" role={riskError?'alert':'status'}>{riskError?`Snapshot Model недоступна: ${riskError}`:'Рассчитываем Snapshot Model на сервере…'}</div>;
+ if(!risk)return <div className="market-state" role="status">Рассчитываем Snapshot Model на сервере…</div>;
  return <>
   <div className="page-heading"><div><div className="eyebrow">ОБЪЯСНИМАЯ АНАЛИТИКА</div><h1>Snapshot Model</h1><p>Текущее состояние клиента и причины риска.</p></div><label className="client-select">Клиент<GlassSelect value={account.id} onChange={value=>setParams({client:value})} options={data.accounts.map(item=>({value:item.id,label:`${item.name} · ${item.id}`}))}/></label></div>
   <div className="snapshot-grid">
