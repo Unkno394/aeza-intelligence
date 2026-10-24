@@ -1,6 +1,44 @@
-import {useSearchParams,Link} from 'react-router-dom';
-import {History,Database,ScanLine,ChartNoAxesCombined,ArrowUpRight} from 'lucide-react';
+import {useEffect,useMemo,useState} from 'react';
+import {Link,useSearchParams} from 'react-router-dom';
+import {CartesianGrid,Line,LineChart,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
+import {ArrowUpRight,History} from 'lucide-react';
 import {useAnalyzer} from '../hooks/useAnalyzer';
 import {Panel,Empty} from '../components/common';
 import {Button} from '../components/ui/button';
-export default function Historical(){const {data,settings}=useAnalyzer();const [params,setParams]=useSearchParams();if(!data||!settings)return null;const account=data.accounts.find(a=>a.id===params.get('client'))??data.accounts[0];return <><div className="page-heading"><div><div className="eyebrow">ПОВЕДЕНЧЕСКАЯ АНАЛИТИКА</div><h1>Historical Model</h1><p>Динамика, привычки и изменения поведения клиента.</p></div><label className="client-select">Клиент<select value={account?.id??''} onChange={e=>setParams({client:e.target.value})}>{data.accounts.map(a=><option key={a.id} value={a.id}>{a.name} · {a.id}</option>)}</select></label></div><Panel title="Исторический анализ" subtitle={account?.email??'Нет аккаунтов'} action={<span className="badge medium">Ожидание данных</span>}><Empty icon={<History size={30}/>} title="Недостаточно исторических данных">Для анализа поведения необходимы ежедневные снимки за {settings.historicalMinDays} дней. В наборе есть транзакции, но нет истории состояния баланса, услуг и риска.</Empty><div className="empty-action"><Button asChild variant="default"><Link to={`/snapshot?client=${account?.id??''}`}>Открыть текущий анализ <ArrowUpRight size={15}/></Link></Button></div><div className="history-progress"><span>Накоплено снимков</span><strong>0 / {settings.historicalMinDays} дней</strong><div/></div></Panel><div className="three-grid">{[{icon:ChartNoAxesCombined,title:'Динамика риска',text:'Появится после накопления ежедневных оценок модели.'},{icon:Database,title:'История состояний',text:'Изменения баланса, состава услуг и параметров продления.'},{icon:ScanLine,title:'Поведенческие отклонения',text:'Сравнение с индивидуальными привычками клиента.'}].map(x=><div className="future-card" key={x.title}><x.icon size={23}/><h3>{x.title}</h3><p>{x.text}</p><span>Ожидание истории</span></div>)}</div><Panel title="Журнал модели" subtitle="Прозрачный статус исторического анализа"><div className="log-entry"><span className="tiny-dot orange"/><div><strong>Анализ не запущен</strong><p>Проверка данных: 0 ежедневных снимков. Минимальное окно — {settings.historicalMinDays} дней. Прогнозы и поведенческие выводы не сформированы.</p></div><span className="mini-label">DATA_REQUIRED</span></div></Panel></>;}
+
+type Assessment={familiarity:number;is_confident:boolean;is_unusual:boolean;anomaly_score:number|null};
+type HistoryPoint={observedOn:string;assessment:Assessment;features:Record<string,number>};
+
+export default function Historical(){
+ const {data,settings}=useAnalyzer();
+ const [params,setParams]=useSearchParams();
+ const [points,setPoints]=useState<HistoryPoint[]>([]);
+ const [loading,setLoading]=useState(false);
+ const [error,setError]=useState('');
+ const account=data?.accounts.find(a=>a.id===params.get('client'))??data?.accounts[0];
+ useEffect(()=>{
+  if(!account){setPoints([]);return;}
+  const controller=new AbortController();
+  setLoading(true);setError('');
+  fetch(`/api/client/historical/${account.id}`,{signal:controller.signal})
+   .then(async response=>{if(!response.ok)throw new Error(`API: ${response.status}`);return response.json() as Promise<HistoryPoint[]>;})
+   .then(rows=>setPoints(rows.sort((a,b)=>a.observedOn.localeCompare(b.observedOn))))
+   .catch(reason=>{if(!controller.signal.aborted)setError(String(reason));})
+   .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
+  return ()=>controller.abort();
+ },[account?.id]);
+ const chart=useMemo(()=>points.map(point=>({date:point.observedOn,anomaly:point.assessment.anomaly_score??0})),[points]);
+ if(!data||!settings)return null;
+ const latest=points.at(-1);
+ return <>
+  <div className="page-heading"><div><div className="eyebrow">ПОВЕДЕНЧЕСКАЯ АНАЛИТИКА</div><h1>Historical Model</h1><p>Ежедневные снимки и отклонения от привычного поведения клиента.</p></div><label className="client-select">Клиент<select value={account?.id??''} onChange={event=>setParams({client:event.target.value})}>{data.accounts.map(item=><option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></label></div>
+  <Panel title="Исторический анализ" subtitle={account?.email??'Нет аккаунтов'} action={<span className={`badge ${latest?.assessment.is_confident?'low':'medium'}`}>{latest?.assessment.is_confident?'Профиль накоплен':'Накопление истории'}</span>}>
+   {loading?<p>Загружаем историю…</p>:error?<div className="error-box" role="alert">История не загрузилась: {error}</div>:points.length===0?<Empty icon={<History size={30}/>} title="Снимков пока нет">Запустите ежедневный сбор <code>cargo run --bin client_snapshot</code>. После первого запуска здесь появятся реальные наблюдения из PostgreSQL.</Empty>:<>
+    <div className="history-progress"><span>Накоплено снимков</span><strong>{points.length} / {settings.historicalMinDays} дней</strong><div style={{width:`${Math.min(100,points.length/settings.historicalMinDays*100)}%`}}/></div>
+    <p className="body-note">Последний снимок: {latest?.observedOn}. Знакомство модели с историей: {Math.round((latest?.assessment.familiarity??0)*100)}%. {latest?.assessment.is_unusual?'Есть отклонение от личной истории.':'Выраженного отклонения нет.'} Это не вероятность оттока.</p>
+    <div style={{height:260,width:'100%'}}><ResponsiveContainer><LineChart data={chart}><CartesianGrid stroke="#a9dfff1b" vertical={false}/><XAxis dataKey="date" tick={{fill:'#9bb7c9',fontSize:11}}/><YAxis tick={{fill:'#9bb7c9',fontSize:11}}/><Tooltip contentStyle={{background:'#142d42',color:'#e9f7ff'}}/><Line type="monotone" dataKey="anomaly" name="Отклонение" stroke="#9edcff" strokeWidth={2} dot={{r:3}}/></LineChart></ResponsiveContainer></div>
+   </>}
+   {account&&<div className="empty-action"><Button asChild variant="default"><Link to={`/snapshot?client=${account.id}`}>Текущий анализ <ArrowUpRight size={15}/></Link></Button></div>}
+  </Panel>
+ </>;
+}

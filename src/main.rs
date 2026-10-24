@@ -22,9 +22,9 @@ struct Cli {
 enum Command {
     /// Apply pending migrations from migrations/.
     Migrate,
-    /// Revert applied migrations newer than --to (default: all of them).
+    /// Revert applied migrations newer than --to (versions below 104 are protected).
     Rollback {
-        #[arg(long, default_value_t = 0)]
+        #[arg(long, default_value_t = 104)]
         to: i64,
     },
     /// Load a data.json produced by scripts/generate.py into empty tables.

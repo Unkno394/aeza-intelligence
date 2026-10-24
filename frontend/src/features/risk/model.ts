@@ -17,5 +17,5 @@ export function calculateRisk(account: Account, data: Dataset, config: Settings)
  const total=Object.values(config.weights).reduce((a,b)=>a+b,0)||1;
  const factors=values.map(f=>({...f,points:f.severity*config.weights[f.key]/total*100}));
  const score=Math.min(100,Math.max(0,Math.round(factors.reduce((s,f)=>s+f.points,0))));
- return {score,level:score>=config.highThreshold?'high':score>=config.mediumThreshold?'medium':'low',factors,upcomingCents,monthlyCents,topupsCents:tx.filter(t=>t.type==='topup'&&t.status==='completed').reduce((s,t)=>s+t.amountCents,0)};
+ return {score,level:score>=config.highThreshold?'high':score>=config.mediumThreshold?'medium':'low',factors,upcomingCents,monthlyCents,topupsCents:account.totalReplenishedCents??tx.filter(t=>t.type==='topup'&&t.status==='completed').reduce((s,t)=>s+t.amountCents,0)};
 }

@@ -76,7 +76,7 @@ LANGUAGE sql STABLE AS $$
         GROUP BY s."ownerId"
     )
     SELECT
-        a.id,
+        a.id::bigint,
         a.email,
         coalesce(ss.services_count, 0),
         coalesce(ss.monthly_spend, 0)::float8,

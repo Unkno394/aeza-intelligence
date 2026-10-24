@@ -73,13 +73,131 @@ are checked for unusually long waits before a recovery event occurs.
 reports sequence similarity; pattern labels and their relationship to churn
 must come from separate evidence.
 
-The library provides JSON export and import, while the application chooses
-where to store that JSON. The current repository has no customer data source,
-Snapshot Model, or storage adapter.
+The library provides JSON export and import for historical profiles. The
+PostgreSQL adapter loads customer datasets and computes current risk features;
+historical profile persistence still needs an application integration.
 
 ## Market Intelligence
+
+### One PostgreSQL database
+
+Set `DATABASE_URL` in `.env` to the existing `aeza_intelligence` database and
+run `bash scripts/migrate_database.sh`. This applies the market migrations
+(`001`–`004`) and the customer adapter migrations (`100`–`108`) to that same
+database. Customer tables live in `public`; market tables live in
+`market_intelligence`. The script verifies that all required tables exist and
+prints row counts. It does not create or replace a database. Docker Compose
+also uses this `DATABASE_URL` and does not start a second PostgreSQL service.
+It runs the API and an hourly check for daily client snapshots after migration.
+
+The client schema compatibility step recognises the former `scripts/001_schema.sql`
+tables, checks their required columns and converts their enum fields to text
+without deleting rows. SQLx then adds `admins`, `operation_logs`, the feature
+functions and `client_snapshots`. A partial or unfamiliar client schema causes
+the migration to stop with an explicit error for inspection.
+
+Start the API and snapshot scheduler against the existing database with
+`docker compose up -d --build api snapshots`. The API listens on
+`127.0.0.1:3000`; the Vite frontend proxies `/api` there. The API serves
+`/api/client/dataset`, `/api/client/analysis`,
+`/api/client/historical/{id}`, and the three `/api/market/*` routes.
+For a one-time snapshot run, use `cargo run --bin client_snapshot` after
+loading `.env`. Run `bash scripts/check_api.sh` to print response counts.
+Client data is read-only in the frontend; personal model settings are stored
+in the browser. The API listens on loopback and has no user authentication,
+so do not expose it directly to a public network.
+
+Existing market rows remain in place. The migration runner records applied
+versions in `_sqlx_migrations` so repeated runs skip completed migrations.
 
 The [Wayback collector](docs/market-intelligence-wayback.md) and
 [PostgreSQL migration](migrations/001_market_intelligence.sql) support four
 providers and three tables in the existing database. A database connection is
 required to apply the migration and verify persisted observations.
+
+### Search interest
+
+The active Market Intelligence source is **TrendsMCP** for Aéza, Hetzner,
+Contabo, Timeweb Cloud, Selectel, and FirstVDS. A verified terminal request
+returned a 14-week Hetzner series; the Rust collector uses the same curl
+transport by default and parses both a direct array and a JSON-string
+`body` wrapper. Run from the crate root:
+
+```sh
+bash scripts/collect_trends.sh
+```
+
+Use `cargo run --bin search_interest -- dry-run --keyword Hetzner` to verify
+HTTP and JSON without PostgreSQL. `bash scripts/collect_trends.sh` imports
+all six brands due for refresh and prints row counts. The scheduler can run
+with `cargo run --bin search_interest -- schedule` for weekly updates.
+Individual scores are normalized separately, so the page compares changes
+within each brand rather than ranking score levels between brands.
+
+Google Trends Explore CSV import remains an optional path for a joint
+comparison and geography. Its automated web endpoint is rate-limited (429).
+Export **Interest over time** and **Interest by region** from one comparison
+of the same five terms, worldwide, over five years. Import both files with:
+
+```sh
+bash scripts/collect_trends.sh --timeline-csv /path/to/multiTimeline.csv --geo-csv /path/to/geoMap.csv
+```
+
+The CSV columns must be Aeza, Hetzner, Contabo, Timeweb Cloud, Selectel in
+that order. Both CSVs must come from the same comparison window, so their
+scores share a scale.
+
+The Market Intelligence map reads geography from the CSV import. The active
+time-series chart still reads the separate TrendsMCP series. Google's official
+Trends API remains restricted to alpha testers.
+
+The Market Intelligence frontend shows a selected brand's weekly trend,
+aggregated monthly values, and 7/30-day changes. The geography map shows
+country data after a joint-comparison Google Trends CSV import. A 90-day
+free-tier series cannot provide a meaningful yearly chart.
+
+### Currency conversion for competitor tariffs
+
+After importing tariffs, load exchange rates for their observation dates:
+
+```sh
+cargo run --bin market_fx
+```
+
+For an HTTP and JSON check without PostgreSQL, run
+`cargo run --bin market_fx -- --dry-run --date 2025-10-01`.
+
+This applies `migrations/003_exchange_rates.sql`, fetches missing EUR/RUB
+rates from Frankfurter without an API key, and exposes
+`market_intelligence.tariff_prices_rub`. The view retains the original
+`price_minor` and `currency`, and adds `price_rub_minor`, `rub_rate`, and
+`rub_rate_on`. RUB prices use rate 1. Missing historical rates leave the
+converted price `NULL`; the importer reports failed dates. Compare prices
+only for equivalent billing periods and VAT treatment.
+
+### Market API
+
+After the database and imports are ready, run `cargo run --bin market_api`.
+The server listens on `127.0.0.1:3000` by default and serves
+`/api/market/search-interest`, `/api/market/geography`, and
+`/api/market/prices`. The frontend Vite
+development server proxies `/api` to it. An empty response means no imported
+data; database failures return HTTP 500.
+
+For this workspace, a local PostgreSQL cluster was initialized in ignored
+`.local/postgres` with an `aeza_intelligence` database, and its schemas were
+applied. Start it outside a socket-restricted environment with:
+
+```sh
+pg_ctl -D .local/postgres -o '-k /tmp -p 55432 -h 127.0.0.1' -l .local/postgres.log start
+set -a; . ./.env; set +a
+cargo run --bin market_import -- run --mode both
+cargo run --bin market_fx
+cargo run --bin search_interest -- once
+cargo run --bin market_api
+```
+
+This local cluster has not accepted connections in the current sandbox, so
+the imports and API still require a runtime check.
+
+To populate tariffs separately, run `bash scripts/collect_market.sh`.

@@ -13,7 +13,8 @@ export const mockApi:AnalyzerApi={
 export class HttpApi implements AnalyzerApi {
  constructor(private baseUrl:string){}
  private async request<T>(path:string,init?:RequestInit):Promise<T>{const r=await fetch(`${this.baseUrl}${path}`,{...init,headers:{'Content-Type':'application/json',...init?.headers}});if(!r.ok)throw new Error(`API: ${r.status}`);return r.status===204?undefined as T:r.json();}
- getData(){return this.request<Dataset>('/dataset');} getSettings(){return this.request<Settings>('/settings');}
- saveSettings(s:Settings){return this.request<void>('/settings',{method:'PUT',body:JSON.stringify(s)});}
- saveData(d:Dataset){return this.request<void>('/dataset',{method:'PUT',body:JSON.stringify(d)});}
+ getData(){return this.request<Dataset>('/dataset');}
+ async getSettings(){return read('aeza-settings-v1',defaults);}
+ async saveSettings(s:Settings){localStorage.setItem('aeza-settings-v1',JSON.stringify(s));}
+ async saveData(_d:Dataset):Promise<void>{throw new Error('Клиентские данные доступны только для чтения');}
 }

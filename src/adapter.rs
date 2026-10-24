@@ -49,12 +49,60 @@ impl PgAdapter {
 
     /// Applies pending migrations; already applied ones are skipped.
     pub async fn migrate(&self) -> Result<(), Error> {
+        self.baseline_existing_client_tables().await?;
         MIGRATOR.run(&self.pool).await?;
         Ok(())
     }
 
-    /// Reverts applied migrations newer than `target` (0 reverts everything).
+    /// An older release created these three tables with plain SQL, without
+    /// SQLx migration records. Validate and adapt that schema, then record only
+    /// the corresponding creation migrations as already satisfied. Their SQL
+    /// files and checksums remain unchanged for databases that used SQLx.
+    async fn baseline_existing_client_tables(&self) -> Result<(), Error> {
+        let existing: i64 = sqlx::query_scalar(
+            "SELECT (to_regclass('public.accounts') IS NOT NULL)::int \
+                  + (to_regclass('public.services') IS NOT NULL)::int \
+                  + (to_regclass('public.transactions') IS NOT NULL)::int",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        if existing == 0 {
+            return Ok(());
+        }
+        sqlx::raw_sql(include_str!("../migrations/100_legacy_client_schema.sql"))
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS _sqlx_migrations (\
+                version bigint PRIMARY KEY, description text NOT NULL,\
+                installed_on timestamptz NOT NULL DEFAULT now(), success boolean NOT NULL,\
+                checksum bytea NOT NULL, execution_time bigint NOT NULL)",
+        )
+        .execute(&self.pool)
+        .await?;
+        for migration in MIGRATOR
+            .iter()
+            .filter(|m| (101..=103).contains(&m.version) && m.migration_type.is_up_migration())
+        {
+            sqlx::query(
+                "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+                 VALUES ($1, $2, true, $3, 0) ON CONFLICT (version) DO NOTHING",
+            )
+            .bind(migration.version)
+            .bind(&*migration.description)
+            .bind(&*migration.checksum)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Reverts migrations newer than `target`, preserving the existing client
+    /// and market tables (targets below 104 are refused).
     pub async fn rollback(&self, target: i64) -> Result<(), Error> {
+        if target < 104 {
+            return Err(Error::UnsafeRollback);
+        }
         MIGRATOR.undo(&self.pool, target).await?;
         Ok(())
     }

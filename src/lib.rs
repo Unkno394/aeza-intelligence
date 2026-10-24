@@ -27,4 +27,6 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("load requires empty accounts, services and transactions tables")]
     TablesNotEmpty,
+    #[error("rollback below version 104 could delete existing client or market data")]
+    UnsafeRollback,
 }

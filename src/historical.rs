@@ -207,7 +207,7 @@ pub struct BehaviorEvent<'a> {
     pub kind: &'a str,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct MetricDeviation {
     pub lifetime_z_score: Option<f64>,
     pub short_term_z_score: Option<f64>,
@@ -222,7 +222,7 @@ pub struct MetricDeviation {
     pub observations: u64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TransitionDeviation {
     pub stream_id: String,
     pub from: String,
@@ -240,7 +240,7 @@ pub struct TransitionDeviation {
     pub is_rare_transition: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PendingStateDeviation {
     pub stream_id: String,
     pub state: String,
@@ -252,7 +252,7 @@ pub struct PendingStateDeviation {
     pub is_overdue: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HistoricalAssessment {
     /// Confidence in the accumulated customer profile, from 0 to 1.
     pub familiarity: f64,
