@@ -652,7 +652,8 @@ async fn serve_socket(mut socket: WebSocket, state: AppState) {
             },
             incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Text(text))) => state.live.handle(&state.pool, &text).await,
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Err(_)) | None => break,
+                // The close reply is sent by the next read, which then returns None.
                 Some(Ok(_)) => continue,
             },
             _ = ping.tick() => {
