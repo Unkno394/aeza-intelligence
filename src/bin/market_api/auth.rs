@@ -360,11 +360,14 @@ pub async fn me(axum::Extension(session): axum::Extension<Session>) -> Json<Admi
     Json(session.admin)
 }
 
-pub async fn methods(State(auth): State<Arc<Auth>>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "sso": matches!(auth.mode, Mode::Oidc(_)),
-        "local": matches!(auth.mode, Mode::Password),
-    }))
+/// The one way to sign in (auth.mode), so the login page shows only that.
+pub async fn method(State(auth): State<Arc<Auth>>) -> Json<serde_json::Value> {
+    let method = match auth.mode {
+        Mode::Disabled => "disabled",
+        Mode::Password => "password",
+        Mode::Oidc(_) => "oidc",
+    };
+    Json(serde_json::json!({ "method": method }))
 }
 
 #[derive(Deserialize)]

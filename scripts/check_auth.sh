@@ -38,7 +38,7 @@ work="$(mktemp -d)"
 
 if (( up )); then
   mkdir -p .local
-  sed -e 's/^mode[[:space:]]*=.*/mode = "oidc"/' -e 's/^enabled[[:space:]]*=.*/enabled = false/' config.toml >.local/check-auth.toml
+  sed -e 's/^mode[[:space:]]*=.*/mode = "oidc"/' config.toml >.local/check-auth.toml
   export AEZA_CONFIG_FILE=.local/check-auth.toml
   trap 'rm -rf "$work"; echo "Switching api and frontend back to config.toml"; AEZA_CONFIG_FILE= docker compose up -d api frontend >/dev/null 2>&1' EXIT
   docker compose --profile sso up -d --wait "${build[@]}" keycloak api frontend

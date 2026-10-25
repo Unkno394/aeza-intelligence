@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { ArrowRight, KeyRound, LoaderCircle, LockKeyhole, ShieldCheck, TriangleAlert } from 'lucide-react';
-import { localLogin, login } from '../services/auth';
+import { fetchLoginMethod, localLogin, login, type LoginMethod } from '../services/auth';
 import './login.css';
 
 // Codes set by /api/auth/callback as ?authError=.
@@ -19,8 +19,10 @@ export default function Login({ status, error, retry, onSuccess }: { status: Log
   const [password,setPassword]=useState('');
   const [loginError,setLoginError]=useState('');
   const [busy,setBusy]=useState(false);
-  const [ssoEnabled,setSsoEnabled]=useState(false);
-  useEffect(()=>{fetch('/api/auth/methods').then(response=>response.ok?response.json():null).then(value=>setSsoEnabled(Boolean(value?.sso))).catch(()=>{});},[]);
+  // The one way to sign in, from auth.mode of config.toml; null until it is known.
+  const [method,setMethod]=useState<LoginMethod|null>(null);
+  const [methodError,setMethodError]=useState('');
+  useEffect(()=>{if(status!=='anonymous')return;fetchLoginMethod().then(setMethod).catch(cause=>setMethodError(cause instanceof Error?cause.message:String(cause)));},[status]);
   async function submit(event:FormEvent){event.preventDefault();setBusy(true);setLoginError('');try{await localLogin(username,password);onSuccess();}catch(cause){setLoginError(cause instanceof Error?cause.message:String(cause));}finally{setBusy(false);}}
   useEffect(() => {
     try { document.documentElement.dataset.theme = localStorage.getItem('aeza-theme') === 'light' ? 'light' : 'dark'; } catch { /* storage may be disabled */ }
@@ -56,14 +58,20 @@ export default function Login({ status, error, retry, onSuccess }: { status: Log
         {status === 'anonymous' && <>
           {authError && <div className="login-auth-error" role="alert"><TriangleAlert size={16}/><span>{errors[authError] ?? 'Не удалось завершить вход. Попробуйте ещё раз.'}</span></div>}
           {loginError && <div className="login-auth-error" role="alert"><TriangleAlert size={16}/><span>{loginError}</span></div>}
-          <form className="login-form" onSubmit={submit}>
+          {methodError && <div className="login-error" role="alert">
+            <strong>Не удалось узнать способ входа</strong>
+            <span>{methodError}</span>
+            <button type="button" className="login-retry" onClick={()=>{setMethodError('');fetchLoginMethod().then(setMethod).catch(cause=>setMethodError(cause instanceof Error?cause.message:String(cause)));}}>Повторить <ArrowRight size={15}/></button>
+          </div>}
+          {!method && !methodError && <div className="login-state" role="status"><LoaderCircle className="login-spinner" size={18}/><span>Загружаем способ входа…</span></div>}
+          {method === 'password' && <form className="login-form" onSubmit={submit}>
             <label>Логин<input autoComplete="username" value={username} onChange={event=>setUsername(event.target.value)} required/></label>
             <label>Пароль<input type="password" autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} required/></label>
             <button type="submit" className="login-primary" disabled={busy}><KeyRound size={17}/><span>{busy?'Входим…':'Войти'}</span><ArrowRight size={16}/></button>
-          </form>
-          <button type="button" className="login-primary" disabled={!ssoEnabled} title={!ssoEnabled?'Ожидает настройки OIDC-провайдера':undefined} onClick={() => { history.replaceState(null, '', location.pathname); login(); }}>
-            <KeyRound size={17}/><span>{ssoEnabled?'Войти через SSO':'SSO ожидает настройки'}</span><ArrowRight size={16}/>
-          </button>
+          </form>}
+          {method === 'oidc' && <button type="button" className="login-primary" onClick={() => { history.replaceState(null, '', location.pathname); login(); }}>
+            <KeyRound size={17}/><span>Войти через SSO</span><ArrowRight size={16}/>
+          </button>}
           <div className="login-security-note"><LockKeyhole size={14}/><span>Доступ защищён сессией</span></div>
         </>}
       </section>

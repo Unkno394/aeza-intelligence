@@ -306,7 +306,7 @@ the migration to stop with an explicit error for inspection.
 
 Outside Docker, start the API with `cargo run --bin market_api`. It listens on
 `127.0.0.1:3000`; the Vite frontend proxies `/api` there. The API serves
-`/api/auth/{login,callback,me,logout}`, `/api/client/ws`, `/api/client/dataset`, `POST /api/client/snapshot`,
+`/api/auth/{login,callback,me,logout,method}`, `/api/client/ws`, `/api/client/dataset`, `POST /api/client/snapshot`,
 `/api/client/analysis`,
 `/api/client/historical/{id}`, `/api/client/historical/{id}/sequence-peers`,
 `/api/client/historical/patterns`,
@@ -317,7 +317,7 @@ Client data is read-only in the frontend; Risk Score settings are stored in
 `public.client_settings`, versioned in `public.client_settings_history`, and
 shared by every session. Historical snapshots record the configuration version
 used to calculate them. Every route except
-`/api/auth/login`, `/callback` and `/logout` requires a session (see
+`/api/auth/login`, `/callback`, `/logout` and `/method` requires a session (see
 [Authentication](#authentication)).
 
 ### Live channel

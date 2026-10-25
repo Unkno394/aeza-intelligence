@@ -22,21 +22,27 @@ session_hours = 12
 # "oidc"     — внешний OpenID-провайдер, см. [auth.oidc].
 # "disabled" — без входа, любой запрос считается superadmin. Только для
 #              разработки, никогда на доступном из сети хосте.
-mode = "password"
+mode = "oidc"
 
 # Первый администратор. Пока ни у одного админа нет пароля, при старте
 # создаётся superadmin с этим логином; пароль — DEFAULT_USER_PASSWORD в .env
 # (не короче 16 символов). Дальнейшие изменения этого админа сохраняются:
-# перезапуск их не откатывает. Работает только с mode = "password".
+# перезапуск их не откатывает. В режимах "oidc" и "disabled" не используется,
+# так что для смены режима достаточно поменять mode.
 [auth.default_user]
 enabled = true
 login = "admin"
 
-# Используется при mode = "oidc". По умолчанию — встроенный Keycloak, он
-# запускается командой docker compose --profile sso up -d. Если у клиента есть
-# секрет, он задаётся в .env как OIDC_CLIENT_SECRET.
+# Провайдер входа для mode = "oidc". По умолчанию — встроенный Keycloak, он
+# запускается командой docker compose --profile sso up -d.
 [auth.oidc]
+# Адрес провайдера; API читает с него /.well-known/openid-configuration.
 issuer = "http://127.0.0.1:8081/realms/aeza"
+# ID, под которым это приложение зарегистрировано у провайдера. У провайдера
+# нужно указать адрес возврата <public_url>/api/auth/callback. Если при
+# регистрации провайдер выдал приложению пароль (client secret; встроенному
+# Keycloak он не нужен, вход защищён PKCE), его кладут в .env как
+# OIDC_CLIENT_SECRET.
 client_id = "aeza-intelligence"
 scopes = ["openid", "email", "profile"]
 

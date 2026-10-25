@@ -534,7 +534,7 @@ fn router(state: AppState) -> Router {
             auth::require_admin,
         ))
         .route("/api/auth/login", get(auth::login).post(auth::password_login))
-        .route("/api/auth/methods", get(auth::methods))
+        .route("/api/auth/method", get(auth::method))
         .route("/api/auth/callback", get(auth::callback))
         .route("/api/auth/logout", post(auth::logout))
         .with_state(state)

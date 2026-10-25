@@ -518,8 +518,8 @@ async fn anonymous_requests_are_rejected(pool: PgPool) {
     let reply = api.post("/api/client/snapshot", &mut browser, Some(json!({}))).await;
     assert_eq!(reply.status, 401);
     assert_eq!(api.socket(&browser, None).await.err(), Some(401));
-    let methods = api.get("/api/auth/methods", &mut browser).await.json();
-    assert_eq!(methods, json!({"sso": true, "local": false}));
+    let method = api.get("/api/auth/method", &mut browser).await.json();
+    assert_eq!(method, json!({"method": "oidc"}));
 }
 
 #[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
@@ -767,8 +767,8 @@ async fn password_login_checks_the_stored_hash(pool: PgPool) {
     api.add_admin_with_password("inactive@aeza.test", "viewer", PASSWORD).await;
     api.set_active("inactive@aeza.test", false).await;
     let mut browser = Browser::default();
-    let methods = api.get("/api/auth/methods", &mut browser).await.json();
-    assert_eq!(methods, json!({"sso": false, "local": true}));
+    let method = api.get("/api/auth/method", &mut browser).await.json();
+    assert_eq!(method, json!({"method": "password"}));
     let reply = api.get("/api/auth/login", &mut browser).await;
     assert_eq!(reply.location, "/", "there is no provider to redirect to");
 

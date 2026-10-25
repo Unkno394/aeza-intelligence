@@ -49,7 +49,8 @@ pub enum AuthMode {
 }
 
 /// With `mode = "password"`: a superadmin created at startup while no admin
-/// has a password. Its password is the DEFAULT_USER_PASSWORD secret.
+/// has a password. Its password is the DEFAULT_USER_PASSWORD secret. Other
+/// modes ignore it.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DefaultUser {
@@ -130,11 +131,9 @@ impl Config {
                 "auth.mode = \"oidc\" requires an [auth.oidc] section"
             );
         }
-        if self.auth.default_user.enabled {
-            ensure!(
-                self.auth.mode == AuthMode::Password,
-                "auth.default_user requires auth.mode = \"password\""
-            );
+        // In the other modes [auth.default_user] is not used, like [auth.oidc]
+        // outside "oidc", so switching auth.mode is a one-line change.
+        if self.auth.mode == AuthMode::Password && self.auth.default_user.enabled {
             ensure!(
                 !self.auth.default_user.login.is_empty(),
                 "auth.default_user.login is empty"
@@ -206,6 +205,18 @@ mod tests {
     }
 
     #[test]
+    fn switching_the_mode_leaves_the_other_sections_alone() {
+        let all = format!(
+            "{MINIMAL}\n[auth.default_user]\nenabled = true\nlogin = \"admin\"\n\
+             [auth.oidc]\nissuer = \"http://127.0.0.1:8081/realms/aeza\"\nclient_id = \"aeza\"\n"
+        );
+        for mode in ["password", "oidc", "disabled"] {
+            let text = all.replacen("\"password\"", &format!("\"{mode}\""), 1);
+            assert!(Config::parse(&text).is_ok(), "mode = {mode}");
+        }
+    }
+
+    #[test]
     fn mistakes_are_reported_instead_of_ignored() {
         assert!(error(&MINIMAL.replace("mode", "mod")).contains("unknown field `mod`"));
         assert!(error(&MINIMAL.replace("password", "passwd")).contains("unknown variant `passwd`"));
@@ -214,8 +225,6 @@ mod tests {
         assert!(error(&MINIMAL.replace("password", "oidc")).contains("requires an [auth.oidc] section"));
         let default_user = format!("{MINIMAL}\n[auth.default_user]\nenabled = true\n");
         assert!(error(&default_user).contains("login is empty"));
-        let with_oidc = format!("{default_user}login = \"admin\"\n").replace("\"password\"", "\"disabled\"");
-        assert!(error(&with_oidc).contains("requires auth.mode = \"password\""));
         assert!(error(&format!("{MINIMAL}\n[demo]\nreplay_days = 7\n")).contains("0 or 31–365"));
     }
 }
