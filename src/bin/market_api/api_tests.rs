@@ -938,6 +938,8 @@ async fn market_endpoints_answer_without_observations(pool: PgPool) {
         "/api/market/prices/client-cohorts",
         "/api/market/prices/behavior",
         "/api/market/prices/quality",
+        "/api/market/prices/changes",
+        "/api/market/prices/sources",
     ] {
         let reply = api.get(path, &mut browser).await;
         assert_eq!(reply.status, 200, "{path}: {}", reply.body);
@@ -1022,4 +1024,143 @@ async fn services_link_only_to_aeza_tariffs(pool: PgPool) {
             assert!((0..=linked).contains(&cohort[key].as_i64().unwrap()), "{key}: {cohort}");
         }
     }
+}
+
+// ------------------------------------------------------------ price impact
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn price_impact_routes_answer_on_an_empty_database(pool: PgPool) {
+    let api = Api::start(pool, Mode::Disabled).await;
+    let mut browser = Browser::default();
+    for path in ["/api/client/price-impact", "/api/client/price-impact-demo"] {
+        let reply = api.get(path, &mut browser).await;
+        assert_eq!(reply.status, 200, "{path}: {}", reply.body);
+        assert_eq!(reply.json(), json!([]), "{path}");
+    }
+}
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn a_real_customers_price_increase_is_reported(pool: PgPool) {
+    let api = Api::start(pool, Mode::Disabled).await;
+    api.load_fixture().await;
+    // The fixture uses example.test addresses; one customer becomes a real one.
+    sqlx::raw_sql(
+        "UPDATE public.accounts SET email = 'real@customer.test' WHERE id = 1;
+         UPDATE public.services SET price = price * 2
+          WHERE id IN (SELECT id FROM public.services WHERE price > 0 AND \"ownerId\" IN (1, 2)
+                       ORDER BY \"ownerId\" LIMIT 2);",
+    )
+    .execute(&api.pool)
+    .await
+    .unwrap();
+    let (service, owner_price): (i64, i64) = sqlx::query_as(
+        "SELECT id::bigint, price::bigint FROM public.services WHERE \"ownerId\" = 1 AND price > 0 ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&api.pool)
+    .await
+    .unwrap();
+
+    let mut browser = Browser::default();
+    let rows = api.get("/api/client/price-impact", &mut browser).await.json();
+    let rows = rows.as_array().unwrap();
+    assert!(!rows.is_empty(), "the increase is in operation_logs");
+    assert!(rows.iter().all(|row| row["accountId"] == "1"), "example.test customers are left out: {rows:?}");
+    let row = rows.iter().find(|row| row["serviceId"] == service.to_string()).unwrap();
+    assert_eq!(row["currentPriceCents"], owner_price);
+    assert_eq!(row["previousPriceCents"].as_i64().unwrap() * 2, owner_price);
+}
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn scenario_events_are_served_as_stored(pool: PgPool) {
+    let api = Api::start(pool, Mode::Disabled).await;
+    api.load_fixture().await;
+    sqlx::raw_sql(
+        "INSERT INTO public.price_demo_events (event_id, account_id, service_id, control_account_id, changed_at, event)
+         SELECT 'scenario-1', s.\"ownerId\", s.id, 2, now() - interval '75 days',
+                jsonb_build_object('eventId', 'scenario-1', 'accountId', s.\"ownerId\"::text)
+         FROM public.services s WHERE s.\"ownerId\" = 1 ORDER BY s.id LIMIT 1",
+    )
+    .execute(&api.pool)
+    .await
+    .unwrap();
+    let mut browser = Browser::default();
+    let events = api.get("/api/client/price-impact-demo", &mut browser).await.json();
+    assert_eq!(events, json!([{"eventId": "scenario-1", "accountId": "1"}]));
+}
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn the_price_risk_weight_is_part_of_the_settings(pool: PgPool) {
+    let api = Api::start(pool, Mode::Disabled).await;
+    api.load_fixture().await;
+    let mut browser = Browser::default();
+    let mut socket = api.socket(&browser, None).await.unwrap();
+    let snapshot = next_message(&mut socket).await.unwrap();
+    assert_eq!(snapshot["settings"]["weights"]["priceRisk"], 0.0, "off by default");
+    let mut settings = snapshot["settings"].clone();
+    let risks = api.post("/api/client/snapshot", &mut browser, Some(settings.clone())).await.json();
+    let factors = risks[0]["factors"].as_array().unwrap();
+    assert!(factors.iter().any(|factor| factor["key"] == "priceRisk" && factor["available"] == false));
+
+    settings["weights"]["priceRisk"] = json!(20);
+    let update = json!({"type": "updateSettings", "requestId": "p1", "settings": settings});
+    socket.send(tungstenite::Message::Text(update.to_string().into())).await.unwrap();
+    assert_eq!(reply_to(&mut socket, "p1").await["type"], "ack");
+    let stored: f64 = sqlx::query_scalar("SELECT (settings->'weights'->>'priceRisk')::float8 FROM public.client_settings WHERE id")
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, 20.0);
+    settings["weights"]["priceRisk"] = json!(101);
+    let reply = api.post("/api/client/snapshot", &mut browser, Some(settings)).await;
+    assert_eq!(reply.status, 400, "weights are 0–100");
+}
+
+// ------------------------------------------------------- market monitoring
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn competitor_price_changes_and_source_status_are_reported(pool: PgPool) {
+    let api = Api::start(pool, Mode::Disabled).await;
+    let observation = |days_ago: i64| ObservationSource {
+        kind: "live",
+        observed_at: Utc::now() - chrono::Duration::days(days_ago),
+        source_url: "https://hetzner.example/cloud".into(),
+        archive_url: None,
+        cdx_digest: None,
+        parser_version: "test",
+    };
+    let priced = |plan: &str, minor: i64| Offer {
+        price_minor: Some(minor),
+        ..offer(plan)
+    };
+    // CX22 goes up by 10% within the last 90 days; CX32 changed 120 days ago.
+    for (days_ago, offers) in [
+        (130, vec![priced("CX32", 80_000)]),
+        (120, vec![priced("CX32", 90_000)]),
+        (10, vec![priced("CX22", 50_000)]),
+        (1, vec![priced("CX22", 55_000)]),
+    ] {
+        save_offers(&api.pool, "hetzner", &observation(days_ago), &offers)
+            .await
+            .unwrap();
+    }
+
+    let mut browser = Browser::default();
+    let changes = api.get("/api/market/prices/changes", &mut browser).await.json();
+    let changes = changes.as_array().unwrap();
+    assert_eq!(changes.len(), 1, "only the recent change: {changes:?}");
+    let change = &changes[0];
+    assert_eq!(change["providerCode"], "hetzner");
+    assert_eq!(change["planKey"], "CX22");
+    assert_eq!((change["previousPriceMinor"].as_i64(), change["currentPriceMinor"].as_i64()), (Some(50_000), Some(55_000)));
+    assert!((change["changePercent"].as_f64().unwrap() - 10.0).abs() < 1e-9);
+    assert_eq!(change["sourceUrl"], "https://hetzner.example/cloud");
+
+    let sources = api.get("/api/market/prices/sources", &mut browser).await.json();
+    let sources = sources.as_array().unwrap();
+    let source = |code: &str| sources.iter().find(|source| source["providerCode"] == code).unwrap();
+    assert_eq!(source("hetzner")["completeObservations"], 4);
+    assert!(source("hetzner")["lastCompleteAt"].is_string());
+    assert_eq!(source("selectel")["completeObservations"], 0);
+    assert!(source("selectel")["lastRetrievedAt"].is_null());
+    assert!(source("selectel")["tariffPageUrls"].as_array().is_some_and(|urls| !urls.is_empty()));
 }

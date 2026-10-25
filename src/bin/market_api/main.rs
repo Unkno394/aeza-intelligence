@@ -133,6 +133,40 @@ struct MonitoredTariff {
 
 #[derive(Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
+struct MarketPriceChange {
+    provider_code: String,
+    provider: String,
+    plan_key: String,
+    plan_name: String,
+    cpu_cores: Option<f64>,
+    ram_gib: Option<f64>,
+    disk_gib: Option<f64>,
+    region: Option<String>,
+    observed_at: DateTime<Utc>,
+    retrieved_at: DateTime<Utc>,
+    source_url: String,
+    source_kind: String,
+    previous_price_minor: i64,
+    current_price_minor: i64,
+    currency: String,
+    change_percent: f64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+struct MarketSourceStatus {
+    provider_code: String,
+    provider: String,
+    website_url: String,
+    tariff_page_urls: Vec<String>,
+    last_retrieved_at: Option<DateTime<Utc>>,
+    last_complete_at: Option<DateTime<Utc>>,
+    complete_observations: i64,
+    incomplete_observations: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 struct TariffHistoryPoint {
     provider_code: String,
     plan_key: String,
@@ -212,6 +246,50 @@ struct PriceBehaviorRow {
     account_topups_cents: i64,
     complete_followup: bool,
     complete_event_coverage: Option<bool>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+struct InternalPriceImpactRow {
+    event_id: String,
+    service_id: String,
+    account_id: String,
+    account_email: Option<String>,
+    plan_key: Option<String>,
+    plan_name: String,
+    changed_at: DateTime<Utc>,
+    previous_price_cents: i64,
+    current_price_cents: i64,
+    next_renewal_at: DateTime<Utc>,
+    payment_term: String,
+    complete_baseline: bool,
+    complete_pretrend: bool,
+    complete_followup: bool,
+    renewal_due_in_window: bool,
+    current_status: Option<String>,
+    current_auto_prolong: Option<bool>,
+    renewals_before: i64,
+    renewals_earlier: i64,
+    renewals_after: i64,
+    prolong_wait_after: bool,
+    auto_renew_disabled_after: bool,
+    inactive_after: bool,
+    baseline_services_count: Option<i64>,
+    followup_services_count: Option<i64>,
+    baseline_monthly_spend: Option<f64>,
+    followup_monthly_spend: Option<f64>,
+    account_spend_before_cents: i64,
+    account_spend_earlier_cents: i64,
+    account_spend_after_cents: i64,
+    control_account_id: Option<String>,
+    control_services_before: Option<i64>,
+    control_services_after: Option<i64>,
+    control_spend_before_cents: Option<i64>,
+    control_spend_after_cents: Option<i64>,
+    control_renewed_after: Option<bool>,
+    control_renewals_before: Option<i64>,
+    control_renewals_earlier: Option<i64>,
+    control_spend_earlier_cents: Option<i64>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -403,6 +481,7 @@ impl Default for SnapshotSettings {
                 prolong_wait: 15.0,
                 failed_prolong: 10.0,
                 expiring_revenue: 25.0,
+                price_risk: 0.0,
             },
             medium_threshold: 35,
             high_threshold: 65,
@@ -421,10 +500,11 @@ impl SnapshotSettings {
             weights.prolong_wait,
             weights.failed_prolong,
             weights.expiring_revenue,
+            weights.price_risk,
         ];
         all.iter()
-            .all(|weight| weight.is_finite() && *weight >= 0.0)
-            && all.iter().sum::<f64>() > 0.0
+            .all(|weight| weight.is_finite() && (0.0..=100.0).contains(weight))
+            && all[..5].iter().sum::<f64>() > 0.0
             && (1..=90).contains(&self.renewal_window_days)
             && (1..=100).contains(&self.medium_threshold)
             && self.high_threshold > self.medium_threshold
@@ -441,6 +521,12 @@ struct SnapshotWeights {
     prolong_wait: f64,
     failed_prolong: f64,
     expiring_revenue: f64,
+    #[serde(default = "default_price_risk_weight")]
+    price_risk: f64,
+}
+
+fn default_price_risk_weight() -> f64 {
+    0.0
 }
 
 #[derive(Serialize, PartialEq)]
@@ -501,6 +587,8 @@ fn router(state: AppState) -> Router {
         .route("/api/market/geography", get(geography))
         .route("/api/market/prices", get(prices))
         .route("/api/market/prices/monitor", get(monitored_prices))
+        .route("/api/market/prices/changes", get(market_price_changes))
+        .route("/api/market/prices/sources", get(market_source_status))
         .route("/api/market/prices/history", get(price_history))
         .route(
             "/api/market/prices/benchmarks/history",
@@ -517,6 +605,11 @@ fn router(state: AppState) -> Router {
         .route("/api/client/financial-ledger/{id}", get(financial_ledger))
         .route("/api/client/cashflow/{id}", get(client_cashflow))
         .route("/api/client/data-quality", get(client_data_quality))
+        .route("/api/client/price-impact", get(client_price_impact))
+        .route(
+            "/api/client/price-impact-demo",
+            get(client_price_impact_demo),
+        )
         .route("/api/client/snapshot", post(client_snapshot_risks))
         .route("/api/client/historical/{id}", get(client_history))
         .route(
@@ -1235,6 +1328,240 @@ async fn client_snapshot_risks(
     Ok(Json(risks.into_values().collect()))
 }
 
+/// Conservative activation gate. Demo accounts and unresolved renewal outcomes
+/// never provide evidence for a production Snapshot Risk Score factor.
+fn validated_price_severity(
+    rows: &[InternalPriceImpactRow],
+    now: DateTime<Utc>,
+) -> BTreeMap<i64, f64> {
+    use std::collections::BTreeSet;
+    let cutoff = now - chrono::Duration::days(183);
+    let mut latest: BTreeMap<(usize, i64), &InternalPriceImpactRow> = BTreeMap::new();
+    for row in rows {
+        let Ok(account) = row.account_id.parse::<i64>() else {
+            continue;
+        };
+        if account <= 0
+            || row
+                .account_email
+                .as_deref()
+                .unwrap_or("")
+                .ends_with("@example.test")
+            || !row.complete_baseline
+            || !row.complete_pretrend
+            || !row.complete_followup
+            || !row.renewal_due_in_window
+            || row.renewals_before < row.renewals_earlier
+            || row.account_spend_before_cents * 5 < row.account_spend_earlier_cents * 4
+        {
+            continue;
+        }
+        let period = usize::from(row.changed_at >= cutoff);
+        let entry = latest.entry((period, account)).or_insert(row);
+        if row.changed_at > entry.changed_at {
+            *entry = row;
+        }
+    }
+    #[derive(Default)]
+    struct Cohort {
+        eligible: usize,
+        known: usize,
+        adverse: usize,
+        matched: usize,
+        matched_spend: usize,
+        renewed: usize,
+        controls_renewed: usize,
+        distinct_controls: BTreeSet<String>,
+    }
+    let mut cohorts: [[Cohort; 3]; 2] =
+        std::array::from_fn(|_| std::array::from_fn(|_| Cohort::default()));
+    for ((period, _), row) in &latest {
+        let pct = (row.current_price_cents as f64 / row.previous_price_cents as f64 - 1.0) * 100.0;
+        let band = if pct < 10.0 {
+            0
+        } else if pct < 25.0 {
+            1
+        } else {
+            2
+        };
+        let cohort = &mut cohorts[*period][band];
+        cohort.eligible += 1;
+        if row.renewals_after > 0 {
+            cohort.known += 1;
+        } else if row.inactive_after || row.auto_renew_disabled_after || row.prolong_wait_after {
+            cohort.known += 1;
+            cohort.adverse += 1;
+        }
+        if let Some(control) = &row.control_account_id
+            && row.control_renewals_before == Some(row.renewals_before)
+            && row
+                .control_renewals_earlier
+                .is_some_and(|prior| row.control_renewals_before.unwrap_or(0) >= prior)
+            && row
+                .control_spend_earlier_cents
+                .is_some_and(|prior| row.control_spend_before_cents.unwrap_or(0) * 5 >= prior * 4)
+        {
+            cohort.matched += 1;
+            cohort.distinct_controls.insert(control.clone());
+            cohort.renewed += usize::from(row.renewals_after > 0);
+            cohort.controls_renewed += usize::from(row.control_renewed_after.unwrap_or(false));
+            cohort.matched_spend += usize::from(
+                row.account_spend_before_cents > 0
+                    && row.control_spend_before_cents.unwrap_or(0) > 0,
+            );
+        }
+    }
+    let sufficient = cohorts.iter().flatten().all(|c| {
+        c.known >= 100
+            && c.known as f64 / c.eligible.max(1) as f64 >= 0.8
+            && c.matched >= 100
+            && c.matched_spend >= 100
+            && c.distinct_controls.len() >= 100
+    });
+    let period_stable = sufficient
+        && cohorts.iter().all(|period| {
+            let low = &period[0];
+            let high = &period[2];
+            high.adverse as f64 / high.known as f64 - low.adverse as f64 / low.known as f64 >= 0.05
+                && (high.renewed as f64 / high.matched as f64)
+                    < (high.controls_renewed as f64 / high.matched as f64)
+        });
+    if !period_stable {
+        return BTreeMap::new();
+    }
+    let mut spend_values: Vec<f64> = latest
+        .values()
+        .filter_map(|row| row.baseline_monthly_spend)
+        .filter(|value| value.is_finite())
+        .collect();
+    spend_values.sort_by(f64::total_cmp);
+    if spend_values.len() < 2 {
+        return BTreeMap::new();
+    }
+    let median =
+        (spend_values[(spend_values.len() - 1) / 2] + spend_values[spend_values.len() / 2]) / 2.0;
+    let mut segments: [[Cohort; 2]; 2] =
+        std::array::from_fn(|_| std::array::from_fn(|_| Cohort::default()));
+    for row in latest.values() {
+        let Some(spend) = row.baseline_monthly_spend.filter(|value| value.is_finite()) else {
+            continue;
+        };
+        let segment = usize::from(spend > median);
+        let pct = (row.current_price_cents as f64 / row.previous_price_cents as f64 - 1.0) * 100.0;
+        let band = if pct < 10.0 {
+            0
+        } else if pct >= 25.0 {
+            1
+        } else {
+            continue;
+        };
+        let cohort = &mut segments[segment][band];
+        if row.renewals_after > 0 {
+            cohort.known += 1;
+        } else if row.inactive_after || row.auto_renew_disabled_after || row.prolong_wait_after {
+            cohort.known += 1;
+            cohort.adverse += 1;
+        }
+        if let Some(control) = &row.control_account_id
+            && row.control_renewals_before == Some(row.renewals_before)
+            && row
+                .control_renewals_earlier
+                .is_some_and(|prior| row.control_renewals_before.unwrap_or(0) >= prior)
+            && row
+                .control_spend_earlier_cents
+                .is_some_and(|prior| row.control_spend_before_cents.unwrap_or(0) * 5 >= prior * 4)
+        {
+            cohort.matched += 1;
+            cohort.distinct_controls.insert(control.clone());
+            cohort.renewed += usize::from(row.renewals_after > 0);
+            cohort.controls_renewed += usize::from(row.control_renewed_after.unwrap_or(false));
+        }
+    }
+    let segment_stable = segments.iter().all(|segment| {
+        let low = &segment[0];
+        let high = &segment[1];
+        low.known >= 30
+            && high.known >= 30
+            && low.distinct_controls.len() >= 30
+            && high.distinct_controls.len() >= 30
+            && high.adverse as f64 / high.known as f64 - low.adverse as f64 / low.known as f64
+                >= 0.05
+            && (high.renewed as f64 / high.matched as f64)
+                < (high.controls_renewed as f64 / high.matched as f64)
+    });
+    if !segment_stable {
+        return BTreeMap::new();
+    }
+    let mut result = BTreeMap::new();
+    for row in rows {
+        let Ok(account) = row.account_id.parse::<i64>() else {
+            continue;
+        };
+        if account <= 0
+            || row
+                .account_email
+                .as_deref()
+                .unwrap_or("")
+                .ends_with("@example.test")
+            || row.changed_at < now - chrono::Duration::days(90)
+        {
+            continue;
+        }
+        let increase = ((row.current_price_cents as f64 / row.previous_price_cents as f64 - 1.0)
+            / 0.25)
+            .clamp(0.0, 1.0);
+        let outcome = if row.renewals_after > 0 {
+            0.0
+        } else if row.inactive_after || row.auto_renew_disabled_after || row.prolong_wait_after {
+            1.0
+        } else {
+            0.5
+        };
+        result
+            .entry(account)
+            .and_modify(|value: &mut f64| *value = value.max(increase * outcome))
+            .or_insert(increase * outcome);
+    }
+    result
+}
+
+/// Validated price severity by account, recomputed at most once a minute.
+static PRICE_RISK_CACHE: std::sync::OnceLock<
+    tokio::sync::Mutex<Option<(std::time::Instant, BTreeMap<i64, f64>)>>,
+> = std::sync::OnceLock::new();
+
+async fn load_validated_price_severity(pool: &PgPool) -> Result<BTreeMap<i64, f64>> {
+    let cache = PRICE_RISK_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
+    let mut cached = cache.lock().await;
+    if let Some((checked, values)) = cached.as_ref()
+        && checked.elapsed() < std::time::Duration::from_secs(60)
+    {
+        return Ok(values.clone());
+    }
+    let candidate_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM public.operation_logs log WHERE log.entity = 'service' \
+         AND log.action = 'update' AND log.outcome = 'success' \
+         AND log.\"occurredAt\" >= now() - interval '365 days' \
+         AND (log.after->>'ownerId')::bigint > 0 \
+         AND log.before ? 'price' AND log.after ? 'price' \
+         AND (log.after->>'price')::bigint > (log.before->>'price')::bigint",
+    )
+    .fetch_one(pool)
+    .await?;
+    let values = if candidate_count >= 600 {
+        let rows = sqlx::query_as::<_, InternalPriceImpactRow>(include_str!(
+            "../../sql/internal_price_impact.sql"
+        ))
+        .fetch_all(pool)
+        .await?;
+        validated_price_severity(&rows, Utc::now())
+    } else {
+        BTreeMap::new()
+    };
+    *cached = Some((std::time::Instant::now(), values.clone()));
+    Ok(values)
+}
+
 /// Risk Score of every client at the current moment, keyed by account ID.
 async fn load_risks(pool: &PgPool, settings: &SnapshotSettings) -> Result<Risks> {
     let horizon = format!("{} days", settings.renewal_window_days);
@@ -1250,6 +1577,11 @@ async fn load_risks(pool: &PgPool, settings: &SnapshotSettings) -> Result<Risks>
         .into_iter()
         .map(|row| (row.get("id"), row.get("total_replenished")))
         .collect();
+    let price_severity = if settings.weights.price_risk > 0.0 {
+        load_validated_price_severity(pool).await?
+    } else {
+        BTreeMap::new()
+    };
     Ok(clients
         .iter()
         .map(|client| {
@@ -1260,6 +1592,7 @@ async fn load_risks(pool: &PgPool, settings: &SnapshotSettings) -> Result<Risks>
                     .copied()
                     .unwrap_or_default(),
                 settings,
+                price_severity.get(&client.account_id).copied(),
             );
             (risk.account_id.clone(), risk)
         })
@@ -1270,6 +1603,7 @@ fn calculate_snapshot_risk(
     client: &ClientFeatures,
     topups_cents: i64,
     config: &SnapshotSettings,
+    price_risk: Option<f64>,
 ) -> SnapshotRisk {
     let values = [
         (
@@ -1307,6 +1641,17 @@ fn calculate_snapshot_risk(
             config.weights.payment_coverage,
             "Доступный баланс / платежи в ближайшем окне; риск возникает ниже 1.",
         ),
+        (
+            "priceRisk",
+            "Ценовой риск",
+            price_risk,
+            config.weights.price_risk,
+            if config.weights.price_risk == 0.0 {
+                "Ценовой фактор отключён в настройках (вес 0)."
+            } else {
+                "Недостаточно подтверждённых реальных данных, контрольных пар или устойчивости тенденции."
+            },
+        ),
     ];
     let total = values
         .iter()
@@ -1322,18 +1667,19 @@ fn calculate_snapshot_risk(
                 "paymentCoverage" => (1.0 - value.clamp(0.0, 1.0)).clamp(0.0, 1.0),
                 _ => value.clamp(0.0, 1.0),
             });
+            let points = if available && total > 0.0 {
+                severity * weight / total * 100.0
+            } else { 0.0 };
             SnapshotFactor {
                 key,
                 label,
                 severity,
-                points: if available && total > 0.0 {
-                    severity * weight / total * 100.0
-                } else {
-                    0.0
-                },
+                points,
                 value,
                 available,
-                explanation: explanation.to_owned(),
+                explanation: if key == "priceRisk" && available {
+                    format!("Проверенные реальные когорты; недавнее повышение и последующий исход дали выраженность {:.0}%, вклад {:.1} балла при текущем весе. Продление, неопределённый и негативный исход дают разный вклад.", severity * 100.0, points)
+                } else { explanation.to_owned() },
             }
         })
         .collect();
@@ -1531,6 +1877,39 @@ async fn price_quality(State(pool): State<PgPool>) -> Result<Json<Vec<TariffQual
          special_conditions_known, complete_prices, \
          foreign_currency_prices, missing_fx_prices \
          FROM market_intelligence.tariff_data_quality ORDER BY provider_code",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(db_error)?;
+    Ok(Json(rows))
+}
+
+async fn market_price_changes(
+    State(pool): State<PgPool>,
+) -> Result<Json<Vec<MarketPriceChange>>, StatusCode> {
+    let rows =
+        sqlx::query_as::<_, MarketPriceChange>(include_str!("../../sql/market_price_changes.sql"))
+            .fetch_all(&pool)
+            .await
+            .map_err(db_error)?;
+    Ok(Json(rows))
+}
+
+async fn market_source_status(
+    State(pool): State<PgPool>,
+) -> Result<Json<Vec<MarketSourceStatus>>, StatusCode> {
+    let rows = sqlx::query_as::<_, MarketSourceStatus>(
+        "SELECT provider.code AS provider_code, provider.name AS provider, \
+         provider.website_url, provider.tariff_page_urls, \
+         max(price.retrieved_at) AS last_retrieved_at, \
+         max(price.retrieved_at) FILTER (WHERE price.parse_status = 'complete') AS last_complete_at, \
+         count(price.id) FILTER (WHERE price.parse_status = 'complete')::bigint AS complete_observations, \
+         count(price.id) FILTER (WHERE price.parse_status = 'incomplete')::bigint AS incomplete_observations \
+         FROM market_intelligence.providers provider \
+         LEFT JOIN market_intelligence.provider_tariffs tariff ON tariff.provider_id = provider.id \
+         LEFT JOIN market_intelligence.tariff_prices price ON price.provider_tariff_id = tariff.id \
+         GROUP BY provider.id, provider.code, provider.name, provider.website_url, provider.tariff_page_urls \
+         ORDER BY provider.name",
     )
     .fetch_all(&pool)
     .await
@@ -1898,9 +2277,262 @@ async fn price_behavior(
     Ok(Json(rows))
 }
 
+async fn client_price_impact(
+    State(pool): State<PgPool>,
+) -> Result<Json<Vec<InternalPriceImpactRow>>, StatusCode> {
+    let rows = sqlx::query_as::<_, InternalPriceImpactRow>(include_str!(
+        "../../sql/internal_price_impact.sql"
+    ))
+    .fetch_all(&pool)
+    .await
+    .map_err(|error| {
+        eprintln!("internal price impact query failed: {error}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(Json(rows.into_iter().filter(|row| {
+        row.account_id.parse::<i64>().is_ok_and(|id| id > 0)
+            && !row.account_email.as_deref().unwrap_or("").ends_with("@example.test")
+    }).collect()))
+}
+
+/// Explicit scenario overlay linked to fixture IDs. It never enters live scores.
+async fn client_price_impact_demo(
+    State(pool): State<PgPool>,
+) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
+    let rows: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT event FROM public.price_demo_events ORDER BY changed_at DESC, account_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|error| {
+        eprintln!("price scenario query failed: {error}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(Json(rows))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn price_factor_requires_real_matched_and_repeated_evidence() {
+        let now = Utc::now();
+        let mut rows = Vec::new();
+        for period in 0..2 {
+            for band in 0..3 {
+                for index in 0..100 {
+                    let account = 1 + period * 300 + band * 100 + index;
+                    let renewed = index < 80 - band * 15;
+                    rows.push(InternalPriceImpactRow {
+                        event_id: account.to_string(),
+                        service_id: account.to_string(),
+                        account_id: account.to_string(),
+                        account_email: Some(format!("client{account}@real.test")),
+                        plan_key: None,
+                        plan_name: "TEST".into(),
+                        changed_at: now
+                            - chrono::Duration::days(if period == 0 { 270 } else { 75 }),
+                        previous_price_cents: 1000,
+                        current_price_cents: [1050, 1150, 1300][band as usize],
+                        next_renewal_at: now
+                            - chrono::Duration::days(if period == 0 { 255 } else { 60 }),
+                        payment_term: "month".into(),
+                        complete_baseline: true,
+                        complete_pretrend: true,
+                        complete_followup: true,
+                        renewal_due_in_window: true,
+                        current_status: Some("active".into()),
+                        current_auto_prolong: Some(true),
+                        renewals_earlier: 1,
+                        renewals_before: 1,
+                        renewals_after: i64::from(renewed),
+                        prolong_wait_after: !renewed,
+                        auto_renew_disabled_after: false,
+                        inactive_after: false,
+                        baseline_services_count: Some(1),
+                        followup_services_count: Some(1),
+                        baseline_monthly_spend: Some(if index % 2 == 0 { 800.0 } else { 1200.0 }),
+                        followup_monthly_spend: Some(1000.0),
+                        account_spend_earlier_cents: 1000,
+                        account_spend_before_cents: 1000,
+                        account_spend_after_cents: 1000,
+                        control_account_id: Some(format!("control-{account}")),
+                        control_services_before: Some(1),
+                        control_services_after: Some(1),
+                        control_spend_before_cents: Some(1000),
+                        control_spend_after_cents: Some(1000),
+                        control_renewed_after: Some(index < 80),
+                        control_renewals_earlier: Some(1),
+                        control_renewals_before: Some(1),
+                        control_spend_earlier_cents: Some(1000),
+                    });
+                }
+            }
+        }
+        assert!(!validated_price_severity(&rows, now).is_empty());
+        rows[0].renewals_before = 0;
+        assert!(validated_price_severity(&rows, now).is_empty());
+        rows[0].renewals_before = 1;
+        rows[0].account_email = Some("fixture@example.test".into());
+        assert!(validated_price_severity(&rows, now).is_empty());
+        rows[0].account_email = Some("client1@real.test".into());
+        for row in rows.iter_mut().filter(|row| {
+            row.changed_at >= now - chrono::Duration::days(183) && row.current_price_cents == 1300
+        }) {
+            row.renewals_after = 1;
+            row.prolong_wait_after = false;
+        }
+        assert!(validated_price_severity(&rows, now).is_empty());
+    }
+
+    #[test]
+    fn snapshot_risk_keeps_price_factor_unavailable_without_evidence() {
+        let settings: SnapshotSettings = serde_json::from_str(r#"{"weights":{"paymentCoverage":1,"noAutoProlong":1,"prolongWait":1,"failedProlong":1,"expiringRevenue":1},"mediumThreshold":40,"highThreshold":70,"renewalWindowDays":7}"#).unwrap();
+        let client = ClientFeatures {
+            account_id: 1,
+            email: "fixture@example.test".into(),
+            services_count: 1,
+            monthly_spend: 1000.0,
+            short_term_share: Some(0.0),
+            no_auto_prolong_share: Some(1.0),
+            prolong_wait_share: Some(1.0),
+            failed_prolong_share: None,
+            expiring_revenue_share: Some(1.0),
+            upcoming_payments: 1000,
+            spendable_balance: 0,
+            payment_coverage: Some(0.0),
+        };
+        let risk = calculate_snapshot_risk(&client, 500, &settings, None);
+        assert_eq!(risk.score, 100);
+        assert_eq!(risk.level, "high");
+        assert_eq!(risk.upcoming_cents, 1000);
+        assert_eq!(risk.factors.len(), 6);
+        assert!(
+            !risk
+                .factors
+                .iter()
+                .find(|factor| factor.key == "priceRisk")
+                .unwrap()
+                .available
+        );
+        let json = serde_json::to_value(&risk).unwrap();
+        assert_eq!(json["upcomingCents"], 1000);
+        assert_eq!(json["accountId"], "1");
+        assert_eq!(json["settingsVersion"], 0);
+    }
+
+    #[test]
+    fn every_model_weight_changes_its_normalized_factor_contribution() {
+        let client = ClientFeatures {
+            account_id: 1,
+            email: "weights@example.test".into(),
+            services_count: 4,
+            monthly_spend: 1_000.0,
+            short_term_share: Some(0.25),
+            no_auto_prolong_share: Some(0.60),
+            prolong_wait_share: Some(0.30),
+            failed_prolong_share: Some(0.50),
+            expiring_revenue_share: Some(0.40),
+            upcoming_payments: 1_000,
+            spendable_balance: 200,
+            payment_coverage: Some(0.20),
+        };
+        let baseline = SnapshotSettings {
+            weights: SnapshotWeights {
+                payment_coverage: 10.0,
+                no_auto_prolong: 10.0,
+                prolong_wait: 10.0,
+                failed_prolong: 10.0,
+                expiring_revenue: 10.0,
+                price_risk: 10.0,
+            },
+            medium_threshold: 35,
+            high_threshold: 65,
+            renewal_window_days: 14,
+            historical_min_days: 30,
+        };
+        let expected_factor_keys = [
+            ("paymentCoverage", "payment_coverage"),
+            ("noAutoProlongShare", "no_auto_prolong"),
+            ("prolongWaitShare", "prolong_wait"),
+            ("failedProlongShare", "failed_prolong"),
+            ("expiringRevenueShare", "expiring_revenue"),
+            ("priceRisk", "price_risk"),
+        ];
+
+        for (factor_key, weight_field) in expected_factor_keys {
+            let baseline_risk = calculate_snapshot_risk(&client, 0, &baseline, Some(0.80));
+            let baseline_points = baseline_risk
+                .factors
+                .iter()
+                .find(|factor| factor.key == factor_key)
+                .unwrap()
+                .points;
+            let mut updated = SnapshotSettings {
+                weights: SnapshotWeights {
+                    payment_coverage: 10.0,
+                    no_auto_prolong: 10.0,
+                    prolong_wait: 10.0,
+                    failed_prolong: 10.0,
+                    expiring_revenue: 10.0,
+                    price_risk: 10.0,
+                },
+                medium_threshold: 35,
+                high_threshold: 65,
+                renewal_window_days: 14,
+                historical_min_days: 30,
+            };
+            match weight_field {
+                "payment_coverage" => updated.weights.payment_coverage = 60.0,
+                "no_auto_prolong" => updated.weights.no_auto_prolong = 60.0,
+                "prolong_wait" => updated.weights.prolong_wait = 60.0,
+                "failed_prolong" => updated.weights.failed_prolong = 60.0,
+                "expiring_revenue" => updated.weights.expiring_revenue = 60.0,
+                "price_risk" => updated.weights.price_risk = 60.0,
+                _ => unreachable!(),
+            }
+            let updated_risk = calculate_snapshot_risk(&client, 0, &updated, Some(0.80));
+            let updated_points = updated_risk
+                .factors
+                .iter()
+                .find(|factor| factor.key == factor_key)
+                .unwrap()
+                .points;
+            assert_ne!(updated_points, baseline_points, "{factor_key} weight");
+            assert_eq!(
+                updated_risk.score,
+                updated_risk
+                    .factors
+                    .iter()
+                    .map(|factor| factor.points)
+                    .sum::<f64>()
+                    .round() as i64,
+                "{factor_key} keeps the normalized score equal to the factor sum"
+            );
+        }
+    }
+
+    #[test]
+    fn settings_reject_negative_non_finite_and_out_of_range_weights() {
+        let mut settings = SnapshotSettings::default();
+        assert!(settings.is_valid());
+
+        settings.weights.payment_coverage = -0.01;
+        assert!(!settings.is_valid());
+        settings.weights.payment_coverage = 35.0;
+        settings.weights.price_risk = 100.01;
+        assert!(!settings.is_valid());
+        settings.weights.price_risk = f64::INFINITY;
+        assert!(!settings.is_valid());
+        settings.weights.price_risk = 0.0;
+        settings.weights.payment_coverage = 0.0;
+        settings.weights.no_auto_prolong = 0.0;
+        settings.weights.prolong_wait = 0.0;
+        settings.weights.failed_prolong = 0.0;
+        settings.weights.expiring_revenue = 0.0;
+        assert!(!settings.is_valid());
+    }
 
     #[test]
     fn client_json_matches_frontend_field_names() {
@@ -1924,7 +2556,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_risk_uses_the_five_current_risk_features() {
+    fn snapshot_risk_uses_the_five_measured_features_and_the_price_factor() {
         let settings: SnapshotSettings = serde_json::from_str(r#"{"weights":{"paymentCoverage":1,"noAutoProlong":1,"prolongWait":1,"failedProlong":1,"expiringRevenue":1},"mediumThreshold":40,"highThreshold":70,"renewalWindowDays":7}"#).unwrap();
         let client = ClientFeatures {
             account_id: 1,
@@ -1940,11 +2572,13 @@ mod tests {
             spendable_balance: 0,
             payment_coverage: Some(0.0),
         };
-        let risk = calculate_snapshot_risk(&client, 500, &settings);
+        let risk = calculate_snapshot_risk(&client, 500, &settings, None);
         assert_eq!(risk.score, 100);
         assert_eq!(risk.level, "high");
         assert_eq!(risk.upcoming_cents, 1000);
-        assert_eq!(risk.factors.len(), 5);
+        // The five measured features, plus the price factor without evidence.
+        assert_eq!(risk.factors.len(), 6);
+        assert!(risk.factors.iter().any(|factor| factor.key == "priceRisk" && !factor.available));
         let json = serde_json::to_value(&risk).unwrap();
         assert_eq!(json["upcomingCents"], 1000);
         assert_eq!(json["accountId"], "1");
@@ -1968,7 +2602,7 @@ mod tests {
             payment_coverage: Some(1.0),
         };
         let baseline = SnapshotSettings::default();
-        let baseline_risk = calculate_snapshot_risk(&client, 0, &baseline);
+        let baseline_risk = calculate_snapshot_risk(&client, 0, &baseline, None);
         assert_eq!(baseline_risk.score, 17);
         assert_eq!(baseline_risk.level, "low");
 
@@ -1977,7 +2611,7 @@ mod tests {
             high_threshold: 20,
             ..SnapshotSettings::default()
         };
-        let thresholded_risk = calculate_snapshot_risk(&client, 0, &thresholded);
+        let thresholded_risk = calculate_snapshot_risk(&client, 0, &thresholded, None);
         assert_eq!(thresholded_risk.score, baseline_risk.score);
         assert_eq!(thresholded_risk.level, "medium");
 
@@ -1988,13 +2622,14 @@ mod tests {
                 prolong_wait: 0.0,
                 failed_prolong: 0.0,
                 expiring_revenue: 0.0,
+                price_risk: 0.0,
             },
             medium_threshold: 20,
             high_threshold: 80,
             renewal_window_days: 14,
             historical_min_days: 30,
         };
-        let weighted_risk = calculate_snapshot_risk(&client, 0, &weighted);
+        let weighted_risk = calculate_snapshot_risk(&client, 0, &weighted, None);
         assert_eq!(weighted_risk.score, 100);
         assert_eq!(weighted_risk.level, "high");
     }
@@ -2051,7 +2686,7 @@ mod tests {
             clients
                 .iter()
                 .map(|client| {
-                    let risk = calculate_snapshot_risk(client, 0, &settings);
+                    let risk = calculate_snapshot_risk(client, 0, &settings, None);
                     (risk.account_id.clone(), risk)
                 })
                 .collect()
@@ -2088,7 +2723,7 @@ mod tests {
             payment_coverage: None,
         };
         let settings: SnapshotSettings = serde_json::from_str(r#"{"weights":{"paymentCoverage":35,"noAutoProlong":15,"prolongWait":15,"failedProlong":10,"expiringRevenue":25},"mediumThreshold":35,"highThreshold":65,"renewalWindowDays":14}"#).unwrap();
-        let risk = calculate_snapshot_risk(&client, 0, &settings);
+        let risk = calculate_snapshot_risk(&client, 0, &settings, None);
         assert_eq!(risk.score, 0);
         assert_eq!(risk.level, "insufficient");
         assert_eq!(risk.upcoming_cents, 0);

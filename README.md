@@ -309,7 +309,8 @@ Outside Docker, start the API with `cargo run --bin market_api`. It listens on
 `/api/auth/{login,callback,me,logout,method}`, `/api/client/ws`, `/api/client/dataset`, `POST /api/client/snapshot`,
 `/api/client/analysis`,
 `/api/client/historical/{id}`, `/api/client/historical/{id}/sequence-peers`,
-`/api/client/historical/patterns`,
+`/api/client/historical/patterns`, `/api/client/price-impact`,
+`/api/client/price-impact-demo`,
 and the three `/api/market/*` routes.
 For a one-time snapshot run, use `cargo run --bin client_snapshot` after
 loading `.env`.
@@ -319,6 +320,36 @@ shared by every session. Historical snapshots record the configuration version
 used to calculate them. Every route except
 `/api/auth/login`, `/callback`, `/logout` and `/method` requires a session (see
 [Authentication](#authentication)).
+
+### Market monitoring
+
+`GET /api/market/prices/changes` lists competitor price changes of the last
+90 days (`src/sql/market_price_changes.sql`): consecutive complete monthly
+observations of the same tariff and price kind whose price differs, with the
+same currency and VAT treatment, and the change in percent. It needs at least
+two collector runs that saw different prices. `GET /api/market/prices/sources`
+shows each provider's tariff pages, when they were last collected and how many
+observations were complete or incomplete.
+
+### Price Impact
+
+`GET /api/client/price-impact` lists price increases of real customers'
+services (`src/sql/internal_price_impact.sql`, from `public.operation_logs`):
+the price before and after, renewals and spend before and after the change,
+and a matched control customer whose price did not change. Accounts with a
+non-positive ID or an `@example.test` address are left out.
+
+The Risk Score has a sixth factor, `priceRisk` ("Ценовой риск"). Its weight
+is 0 by default; with a positive weight it is only available once at least
+600 real price increases in the last year form validated cohorts, so the
+factor never rests on a handful of events or on synthetic customers.
+
+`GET /api/client/price-impact-demo` serves the scenario events stored in
+`public.price_demo_events`, which never touch billed services or live scores.
+`psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/seed_linked_price_demo.sql`
+fills it, pairing up to 720 `@example.test` customers with 600 unchanged
+controls, so it needs at least 722 such customers; the 10 of
+`scripts/given/data.json` produce no events.
 
 ### Live channel
 
