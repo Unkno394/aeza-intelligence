@@ -1164,3 +1164,183 @@ async fn competitor_price_changes_and_source_status_are_reported(pool: PgPool) {
     assert!(source("selectel")["lastRetrievedAt"].is_null());
     assert!(source("selectel")["tariffPageUrls"].as_array().is_some_and(|urls| !urls.is_empty()));
 }
+
+// ------------------------------------------------------------------- v1
+
+/// scripts/fixtures/data.json with real-looking addresses: v1 hides
+/// @example.test customers, so the fixture itself would show none.
+fn real_snapshot() -> Value {
+    let raw = include_str!("../../../scripts/fixtures/data.json").replace("@example.test", "@client.test");
+    serde_json::from_str(&raw).unwrap()
+}
+
+async fn v1_login(api: &Api, email: &str) -> Browser {
+    let mut browser = Browser::default();
+    let body = json!({"username": email, "password": PASSWORD});
+    let reply = api.post("/api/v1/auth/login", &mut browser, Some(body)).await;
+    assert_eq!(reply.status, 204, "{email}: {}", reply.body);
+    browser
+}
+
+async fn put_snapshot(api: &Api, browser: &mut Browser, snapshot: Value) -> Reply {
+    let origin = api.base.clone();
+    api.send(reqwest::Method::PUT, "/api/v1/source/snapshot", browser, Some(&origin), Some(snapshot))
+        .await
+}
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn v1_session_endpoints_follow_the_login(pool: PgPool) {
+    let api = Api::start(pool, Mode::Password).await;
+    api.add_admin_with_password("viewer@aeza.test", "viewer", PASSWORD).await;
+    let mut anonymous = Browser::default();
+    for path in ["/api/v1/auth/me", "/api/v1/customers", "/api/v1/analytics/summary", "/api/v1/model/settings"] {
+        assert_eq!(api.get(path, &mut anonymous).await.status, 401, "{path}");
+    }
+    assert_eq!(put_snapshot(&api, &mut anonymous, real_snapshot()).await.status, 401);
+
+    let mut browser = v1_login(&api, "viewer@aeza.test").await;
+    let me = api.get("/api/v1/auth/me", &mut browser).await.json();
+    assert_eq!((me["email"].as_str(), me["role"].as_str()), (Some("viewer@aeza.test"), Some("viewer")));
+    let mut stolen = Browser { cookies: browser.cookies.clone() };
+    assert_eq!(api.post("/api/v1/auth/logout", &mut browser, None).await.status, 200);
+    assert_eq!(api.get("/api/v1/auth/me", &mut stolen).await.status, 401);
+
+    let wrong = json!({"username": "viewer@aeza.test", "password": "wrong-password-of-enough-length"});
+    assert_eq!(api.post("/api/v1/auth/login", &mut Browser::default(), Some(wrong)).await.status, 401);
+}
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn v1_snapshot_upload_drives_customers_summary_and_metrics(pool: PgPool) {
+    let api = Api::start(pool, Mode::Password).await;
+    api.add_admin_with_password("viewer@aeza.test", "viewer", PASSWORD).await;
+    api.add_admin_with_password("operator@aeza.test", "operator", PASSWORD).await;
+    let mut viewer = v1_login(&api, "viewer@aeza.test").await;
+    let mut operator = v1_login(&api, "operator@aeza.test").await;
+
+    assert_eq!(put_snapshot(&api, &mut viewer, real_snapshot()).await.status, 403, "viewers only read");
+    let reply = put_snapshot(&api, &mut operator, real_snapshot()).await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    assert_eq!(reply.json(), json!({"accounts": 10, "services": 30, "transactions": 100, "rejected": 0}));
+
+    // Customers: every visible one has a risk, sorting, filtering and paging work.
+    let list = api.get("/api/v1/customers?limit=500", &mut viewer).await.json();
+    assert_eq!(list["total"], 10);
+    let scores = |list: &Value| list["items"].as_array().unwrap().iter().map(|item| item["risk"]["score"].as_i64().unwrap()).collect::<Vec<_>>();
+    let descending = api.get("/api/v1/customers?sort=score&direction=desc&limit=500", &mut viewer).await.json();
+    assert!(scores(&descending).windows(2).all(|pair| pair[0] >= pair[1]), "{:?}", scores(&descending));
+    let page = api.get("/api/v1/customers?sort=id&limit=3&page=2", &mut viewer).await.json();
+    let ids: Vec<i64> = page["items"].as_array().unwrap().iter().map(|item| item["account"]["id"].as_i64().unwrap()).collect();
+    assert_eq!((ids, page["total"].as_i64()), (vec![4, 5, 6], Some(10)));
+    let level = descending["items"][0]["risk"]["level"].as_str().unwrap().to_owned();
+    let filtered = api.get(&format!("/api/v1/customers?risk={level}&limit=500"), &mut viewer).await.json();
+    assert!(filtered["items"].as_array().unwrap().iter().all(|item| item["risk"]["level"] == level.as_str()));
+    let found = api.get("/api/v1/customers?search=user-0007", &mut viewer).await.json();
+    assert_eq!(found["items"][0]["account"]["email"], "user-0007@client.test");
+    for invalid in ["sort=name", "direction=up", "risk=extreme", "page=0", "limit=501"] {
+        assert_eq!(api.get(&format!("/api/v1/customers?{invalid}"), &mut viewer).await.status, 400, "{invalid}");
+    }
+
+    // One customer with its services, transactions and explained factors.
+    let customer = api.get("/api/v1/customers/1", &mut viewer).await.json();
+    assert_eq!(customer["account"]["id"], 1);
+    let services = customer["services"].as_array().unwrap();
+    assert!(!services.is_empty() && services.iter().all(|service| service["ownerId"] == 1));
+    assert!(customer["transactions"].is_array());
+    assert!(customer["risk"]["factors"].as_array().unwrap().iter().all(|factor| factor["explanation"].is_string()));
+    for missing in ["999999", "abc"] {
+        assert_eq!(api.get(&format!("/api/v1/customers/{missing}"), &mut viewer).await.status, 404, "{missing}");
+    }
+
+    // The summary and the Prometheus gauges count the same customers.
+    let summary = api.get("/api/v1/analytics/summary", &mut viewer).await.json();
+    assert_eq!(summary["customersTotal"], 10);
+    let by_risk: i64 = summary["customersByRisk"].as_object().unwrap().values().map(|count| count.as_i64().unwrap()).sum();
+    assert_eq!(by_risk, 10);
+    assert_eq!(summary["expectedLossHorizonDays"], 30);
+    let metrics = api.get("/metrics", &mut Browser::default()).await;
+    assert_eq!(metrics.status, 200);
+    assert!(metrics.body.contains("aeza_customers_total 10\n"), "{}", metrics.body);
+    assert!(metrics.body.contains(&format!("aeza_expected_loss_30d_eur_cents {}\n", summary["expectedLossEurCents"])));
+    assert!(!metrics.body.contains("account"), "no customer IDs in labels");
+
+    // A second upload replaces the snapshot instead of adding to it.
+    let mut smaller = real_snapshot();
+    smaller["accounts"].as_array_mut().unwrap().truncate(1);
+    smaller["services"].as_array_mut().unwrap().retain(|service| service["ownerId"] == 1);
+    let kept: Vec<Value> = smaller["services"].as_array().unwrap().iter().map(|service| service["id"].clone()).collect();
+    smaller["transactions"].as_array_mut().unwrap().retain(|transaction| kept.contains(&transaction["serviceId"]));
+    assert_eq!(put_snapshot(&api, &mut operator, smaller).await.status, 200);
+    assert_eq!(api.get("/api/v1/customers", &mut viewer).await.json()["total"], 1);
+}
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn v1_rejects_invalid_snapshots_and_keeps_the_previous_one(pool: PgPool) {
+    let api = Api::start(pool, Mode::Password).await;
+    api.add_admin_with_password("operator@aeza.test", "operator", PASSWORD).await;
+    let mut operator = v1_login(&api, "operator@aeza.test").await;
+    assert_eq!(put_snapshot(&api, &mut operator, real_snapshot()).await.status, 200);
+
+    let mut synthetic = real_snapshot();
+    synthetic["accounts"][0]["email"] = json!("someone@example.test");
+    let mut orphan = real_snapshot();
+    orphan["services"][0]["ownerId"] = json!(999_999);
+    let mut empty = real_snapshot();
+    empty["accounts"] = json!([]);
+    for (name, snapshot) in [("synthetic customer", synthetic), ("unknown owner", orphan), ("no accounts", empty)] {
+        assert_eq!(put_snapshot(&api, &mut operator, snapshot).await.status, 400, "{name}");
+    }
+    // Amounts above 10 euros are real amounts, not a constraint violation.
+    let mut large = real_snapshot();
+    large["transactions"][0]["amount"] = json!(250_000);
+    assert_eq!(put_snapshot(&api, &mut operator, large).await.status, 200);
+    let amount: i32 = sqlx::query_scalar("SELECT max(amount) FROM public.transactions")
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+    assert_eq!(amount, 250_000);
+    assert_eq!(api.get("/api/v1/customers", &mut operator).await.json()["total"], 10);
+}
+
+async fn patch_settings(api: &Api, browser: &mut Browser, settings: Value) -> Reply {
+    let origin = api.base.clone();
+    api.send(reqwest::Method::PATCH, "/api/v1/model/settings", browser, Some(&origin), Some(settings))
+        .await
+}
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn v1_model_settings_are_read_by_all_and_changed_by_operators(pool: PgPool) {
+    let api = Api::start(pool, Mode::Password).await;
+    api.add_admin_with_password("viewer@aeza.test", "viewer", PASSWORD).await;
+    api.add_admin_with_password("operator@aeza.test", "operator", PASSWORD).await;
+    let mut viewer = v1_login(&api, "viewer@aeza.test").await;
+    let mut operator = v1_login(&api, "operator@aeza.test").await;
+    let current = api.get("/api/v1/model/settings", &mut viewer).await.json();
+    let version = current["metadata"]["version"].as_i64().unwrap();
+    let mut settings = current["settings"].clone();
+    settings["highThreshold"] = json!(70);
+
+    let reply = patch_settings(&api, &mut viewer, settings.clone()).await;
+    assert_eq!(reply.status, 403);
+    let reply = patch_settings(&api, &mut operator, settings.clone()).await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    let updated = reply.json();
+    assert_eq!(updated["settings"]["highThreshold"], 70);
+    assert_eq!(updated["metadata"]["version"], version + 1);
+    assert_eq!(updated["metadata"]["updatedBy"], "operator@aeza.test");
+    assert_eq!(api.get("/api/v1/model/settings", &mut viewer).await.json()["settings"]["highThreshold"], 70);
+
+    settings["highThreshold"] = json!(settings["mediumThreshold"]);
+    let reply = patch_settings(&api, &mut operator, settings).await;
+    assert_eq!(reply.status, 400, "high must stay above medium");
+}
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn v1_documentation_is_public(pool: PgPool) {
+    let api = Api::start(pool, Mode::Password).await;
+    let mut anonymous = Browser::default();
+    let docs = api.get("/api/v1/docs", &mut anonymous).await;
+    assert_eq!(docs.status, 200);
+    assert!(docs.body.contains("SwaggerUIBundle") && docs.body.contains("/api/v1/openapi.json"));
+    let spec = api.get("/api/v1/openapi.json", &mut anonymous).await.json();
+    assert!(spec["paths"]["/api/v1/customers"]["get"].is_object());
+}

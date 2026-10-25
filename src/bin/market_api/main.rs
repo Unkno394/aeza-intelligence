@@ -21,13 +21,13 @@ use anyhow::Result;
 use axum::{
     Extension, Json, Router,
     extract::{
-        FromRef, Path, State,
+        FromRef, Path, Query, State,
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
-    http::StatusCode,
+    http::{StatusCode, header},
     middleware,
     response::Response,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use clap::Parser;
@@ -42,6 +42,8 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Scores depend on the current time (renewal window), so they are recalculated
 /// at least this often even without data changes.
 const RESCORE_INTERVAL: Duration = Duration::from_secs(60);
+/// Horizon of the expected-loss scenario of /api/v1/analytics/summary.
+const EXPECTED_LOSS_HORIZON_DAYS: i64 = 30;
 /// Also how often an open WebSocket rechecks its session; shorter in tests so
 /// a deactivated admin's socket closes without a 30-second wait.
 const PING_INTERVAL: Duration = if cfg!(test) {
@@ -348,6 +350,48 @@ struct ClientTransaction {
     created_at: DateTime<Utc>,
 }
 
+/// Public v1 DTOs intentionally preserve the source snapshot vocabulary. The
+/// frontend DTOs above may normalize names for presentation, but the contract
+/// API must expose the values documented by the task.
+#[derive(Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+struct V1Account {
+    id: i64,
+    email: String,
+    balance: i64,
+    withdraw_balance: i64,
+    total_replenished: i64,
+    bonus_balance: i64,
+    bonus_state: String,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+struct V1Service {
+    id: i64,
+    name: String,
+    owner_id: i64,
+    payment_term: String,
+    auto_prolong: bool,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    status: String,
+    price: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+struct V1Transaction {
+    id: i64,
+    amount: i32,
+    status: String,
+    performed_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    #[serde(rename = "type")]
+    operation_type: String,
+    service_id: i64,
+}
+
 #[derive(Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 struct FinancialLedgerEntry {
@@ -622,6 +666,15 @@ fn router(state: AppState) -> Router {
         )
         .route("/api/client/ws", get(live_socket))
         .route("/api/auth/me", get(auth::me))
+        .route("/api/v1/auth/me", get(auth::me))
+        .route("/api/v1/customers", get(v1_customers))
+        .route("/api/v1/customers/{id}", get(v1_customer))
+        .route("/api/v1/analytics/summary", get(v1_summary))
+        .route(
+            "/api/v1/model/settings",
+            get(v1_settings).patch(v1_patch_settings),
+        )
+        .route("/api/v1/source/snapshot", put(v1_source_snapshot))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_admin,
@@ -630,6 +683,11 @@ fn router(state: AppState) -> Router {
         .route("/api/auth/method", get(auth::method))
         .route("/api/auth/callback", get(auth::callback))
         .route("/api/auth/logout", post(auth::logout))
+        .route("/api/v1/auth/login", post(auth::password_login))
+        .route("/api/v1/auth/logout", post(auth::logout))
+        .route("/api/v1/docs", get(v1_docs))
+        .route("/api/v1/openapi.json", get(v1_openapi))
+        .route("/metrics", get(v1_metrics))
         .with_state(state)
 }
 
@@ -638,6 +696,399 @@ struct AppState {
     pool: PgPool,
     live: Arc<Live>,
     auth: Arc<Auth>,
+}
+
+#[derive(Deserialize)]
+struct CustomerQuery {
+    search: Option<String>,
+    risk: Option<String>,
+    sort: Option<String>,
+    direction: Option<String>,
+    page: Option<usize>,
+    limit: Option<usize>,
+}
+
+fn validate_customer_query(query: &CustomerQuery) -> Result<&'static str, StatusCode> {
+    let sort = query.sort.as_deref().unwrap_or("score");
+    let direction = query.direction.as_deref().unwrap_or("asc");
+    if !matches!(direction, "asc" | "desc")
+        || query.risk.as_deref().is_some_and(|risk| {
+            !matches!(
+                risk,
+                "all" | "high" | "medium" | "low" | "limited" | "insufficient"
+            )
+        })
+        || query.page.unwrap_or(1) == 0
+        || !(1..=500).contains(&query.limit.unwrap_or(25))
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    match sort {
+        "id" => Ok("id"),
+        "email" => Ok("lower(email)"),
+        "balance" => Ok("balance"),
+        "totalReplenished" => Ok("\"totalReplenished\""),
+        "score" => Ok("id"),
+        _ => Err(StatusCode::BAD_REQUEST),
+    }
+}
+
+fn compare_customer_scores(
+    left_score: i64,
+    left_id: i64,
+    right_score: i64,
+    right_id: i64,
+    direction: &str,
+) -> std::cmp::Ordering {
+    let scores = if direction == "desc" {
+        right_score.cmp(&left_score)
+    } else {
+        left_score.cmp(&right_score)
+    };
+    scores.then_with(|| left_id.cmp(&right_id))
+}
+
+fn visible_customer(id: &str, email: &str) -> bool {
+    id.parse::<i64>().is_ok_and(|id| id >= 0) && !email.ends_with("@example.test")
+}
+
+fn recurring_service_revenue(service: &ClientService) -> i64 {
+    if matches!(service.status, "active" | "suspended") {
+        service.price_cents
+    } else {
+        0
+    }
+}
+
+/// Score-weighted monthly revenue scenario, rounded to the nearest euro cent.
+/// The score is an explicit business proxy, not a calibrated churn probability.
+fn modeled_expected_loss(monthly_revenue_cents: i64, risk_score: i64) -> i64 {
+    let weighted = i128::from(monthly_revenue_cents.max(0))
+        .saturating_mul(i128::from(risk_score.clamp(0, 100)));
+    ((weighted + 50) / 100).min(i128::from(i64::MAX)) as i64
+}
+
+async fn v1_customers(
+    State(state): State<AppState>,
+    Query(query): Query<CustomerQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let sort = query.sort.as_deref().unwrap_or("score");
+    let direction = query.direction.as_deref().unwrap_or("asc");
+    let sql_order = validate_customer_query(&query)?;
+    let search = query
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let sql = format!(
+        "SELECT id, email, balance, \"withdrawBalance\" AS withdraw_balance, \
+         \"totalReplenished\" AS total_replenished, \"bonusBalance\" AS bonus_balance, \
+         \"bonusState\" AS bonus_state FROM public.accounts \
+         WHERE id >= 0 AND email NOT LIKE '%@example.test' \
+         AND ($1::text IS NULL OR id::text ILIKE '%' || $1 || '%' OR email ILIKE '%' || $1 || '%') \
+         ORDER BY {order} {direction}, id {direction}",
+        order = sql_order,
+        direction = direction.to_ascii_uppercase(),
+    );
+    let accounts = sqlx::query_as::<_, V1Account>(&sql)
+        .bind(search)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(db_error)?;
+    let live = state.live.state.lock().await;
+    let mut rows: Vec<_> = accounts
+        .into_iter()
+        .filter_map(|account| {
+            live.risks
+                .get(&account.id.to_string())
+                .map(|risk| (account, risk))
+        })
+        .filter(|(_, risk)| {
+            query
+                .risk
+                .as_deref()
+                .is_none_or(|level| level == risk.level || level == "all")
+        })
+        .collect();
+    if sort == "score" {
+        rows.sort_by(|(a, ar), (b, br)| {
+            compare_customer_scores(ar.score, a.id, br.score, b.id, direction)
+        });
+    }
+    let total = rows.len();
+    let page = query.page.unwrap_or(1);
+    let limit = query.limit.unwrap_or(25);
+    let items: Vec<_> = rows
+        .into_iter()
+        .skip(page.saturating_sub(1).saturating_mul(limit))
+        .take(limit)
+        .map(|(account, risk)| serde_json::json!({"account":account,"risk":risk}))
+        .collect();
+    Ok(Json(
+        serde_json::json!({"items":items,"total":total,"page":page,"limit":limit}),
+    ))
+}
+
+async fn v1_customer(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let id = id.parse::<i64>().map_err(|_| StatusCode::NOT_FOUND)?;
+    let account = sqlx::query_as::<_, V1Account>(
+        "SELECT id, email, balance, \"withdrawBalance\" AS withdraw_balance, \
+         \"totalReplenished\" AS total_replenished, \"bonusBalance\" AS bonus_balance, \
+         \"bonusState\" AS bonus_state FROM public.accounts \
+         WHERE id = $1 AND id >= 0 AND email NOT LIKE '%@example.test'",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(db_error)?
+    .ok_or(StatusCode::NOT_FOUND)?;
+    let services = sqlx::query_as::<_, V1Service>(
+        "SELECT id, name, \"ownerId\" AS owner_id, \"paymentTerm\" AS payment_term, \
+         \"autoProlong\" AS auto_prolong, \"createdAt\" AS created_at, \
+         \"expiresAt\" AS expires_at, status, price FROM public.services \
+         WHERE \"ownerId\" = $1 ORDER BY id",
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(db_error)?;
+    let transactions = sqlx::query_as::<_, V1Transaction>(
+        "SELECT t.id, t.amount, t.status, t.\"performedAt\" AS performed_at, \
+         t.\"createdAt\" AS created_at, t.type AS operation_type, \
+         t.\"serviceId\" AS service_id FROM public.transactions t \
+         JOIN public.services s ON s.id = t.\"serviceId\" \
+         WHERE s.\"ownerId\" = $1 ORDER BY t.id",
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(db_error)?;
+    let live = state.live.state.lock().await;
+    let risk = live
+        .risks
+        .get(&id.to_string())
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(
+        serde_json::json!({"account":account,"services":services,"transactions":transactions,"risk":risk}),
+    ))
+}
+
+fn summary(live: &LiveState) -> serde_json::Value {
+    let mut levels = BTreeMap::<&str, usize>::new();
+    let mut revenue_at_risk = 0_i64;
+    let mut deficit = 0_i64;
+    let mut expected_loss = 0_i64;
+    let mut assessed_monthly_revenue = 0_i64;
+    let mut unassessed_monthly_revenue = 0_i64;
+    let mut unassessed_customers = 0_usize;
+    let mut customers = 0_usize;
+    for account in &live.dataset.accounts {
+        if !visible_customer(&account.id, &account.email) {
+            continue;
+        }
+        let Some(risk) = live.risks.get(&account.id) else {
+            continue;
+        };
+        customers += 1;
+        *levels.entry(risk.level).or_default() += 1;
+        deficit = deficit.saturating_add(
+            risk.upcoming_cents
+                .saturating_sub(risk.spendable_balance_cents)
+                .max(0),
+        );
+        let monthly_revenue = live
+            .dataset
+            .services
+            .iter()
+            .filter(|service| service.account_id == account.id)
+            .fold(0_i64, |sum, service| {
+                sum.saturating_add(recurring_service_revenue(service))
+            });
+        if risk.assessment_status == "sufficient_data" {
+            assessed_monthly_revenue = assessed_monthly_revenue.saturating_add(monthly_revenue);
+            expected_loss =
+                expected_loss.saturating_add(modeled_expected_loss(monthly_revenue, risk.score));
+        } else {
+            unassessed_monthly_revenue = unassessed_monthly_revenue.saturating_add(monthly_revenue);
+            unassessed_customers += 1;
+        }
+        if risk.level == "high" {
+            revenue_at_risk = revenue_at_risk.saturating_add(monthly_revenue);
+        }
+    }
+    serde_json::json!({
+        "customersTotal":customers,
+        "customersByRisk":levels,
+        "revenueAtRiskEurCents":revenue_at_risk,
+        "paymentDeficitEurCents":deficit,
+        "expectedLossEurCents":expected_loss,
+        "expectedLossHorizonDays":EXPECTED_LOSS_HORIZON_DAYS,
+        "expectedLossAssessedMonthlyRevenueEurCents":assessed_monthly_revenue,
+        "expectedLossUnassessedMonthlyRevenueEurCents":unassessed_monthly_revenue,
+        "expectedLossUnassessedCustomers":unassessed_customers,
+        "expectedLossMethod":"risk_score_weighted_monthly_revenue_v1",
+        "expectedLossDefinition":"30-day scenario estimate: active and suspended monthly service revenue multiplied by Risk Score / 100 for customers with sufficient data. Risk Score is an uncalibrated proxy, not a measured churn probability. Revenue for customers with incomplete assessments is excluded and reported separately. This is gross revenue, not profit; payment deficit is reported separately.",
+        "lastCalculatedAt":live.last_calculated_at,
+        "revenueAtRiskDefinition":"Monthly active and suspended service revenue of high-risk customers; not predicted loss"
+    })
+}
+
+async fn v1_summary(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let live = state.live.state.lock().await;
+    Json(summary(&live))
+}
+
+async fn v1_settings(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let live = state.live.state.lock().await;
+    Json(serde_json::json!({"settings":live.settings,"metadata":live.settings_metadata}))
+}
+
+async fn v1_patch_settings(
+    State(state): State<AppState>,
+    Extension(session): Extension<Session>,
+    Json(settings): Json<SnapshotSettings>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !session.admin.can_edit_settings() {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let metadata = state
+        .live
+        .update_settings(&state.pool, settings, &session.admin.email)
+        .await
+        .map_err(|message| {
+            if message == "Некорректные настройки" {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
+    let live = state.live.state.lock().await;
+    Ok(Json(
+        serde_json::json!({"settings":live.settings,"metadata":metadata}),
+    ))
+}
+
+async fn v1_source_snapshot(
+    State(state): State<AppState>,
+    Extension(session): Extension<Session>,
+    Json(dataset): Json<aeza_intelligence::Dataset>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !session.admin.can_edit_settings() {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if dataset.accounts.is_empty()
+        || dataset
+            .accounts
+            .iter()
+            .any(|account| account.id < 0 || account.email.ends_with("@example.test"))
+        || dataset.services.iter().any(|service| service.id < 0)
+        || dataset
+            .transactions
+            .iter()
+            .any(|transaction| transaction.id < 0)
+        || dataset.validate().is_err()
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let adapter = PgAdapter::from_pool(state.pool.clone());
+    let report = adapter.replace(&dataset).await.map_err(|error| {
+        eprintln!("snapshot replacement failed: {error}");
+        StatusCode::BAD_REQUEST
+    })?;
+    state
+        .live
+        .refresh(&state.pool, true)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(
+        serde_json::json!({"accounts":report.accounts,"services":report.services,"transactions":report.transactions,"rejected":0}),
+    ))
+}
+
+async fn v1_metrics(
+    State(state): State<AppState>,
+) -> ([(header::HeaderName, &'static str); 1], String) {
+    let live = state.live.state.lock().await;
+    let value = summary(&live);
+    let mut output = String::new();
+    output.push_str("# HELP aeza_expected_loss_30d_eur_cents Score-weighted 30-day gross revenue scenario in euro cents; not a calibrated churn prediction.\n");
+    output.push_str("# HELP aeza_expected_loss_assessed_mrr_eur_cents Monthly revenue included in the expected-loss scenario, in euro cents.\n");
+    output.push_str("# HELP aeza_expected_loss_unassessed_mrr_eur_cents Monthly revenue excluded because customer risk data is incomplete, in euro cents.\n");
+    output.push_str("# HELP aeza_expected_loss_unassessed_customers Visible customers whose risk data is limited or insufficient.\n");
+    for (name, number) in [
+        (
+            "aeza_customers_total",
+            value["customersTotal"].as_u64().unwrap_or(0),
+        ),
+        (
+            "aeza_revenue_at_risk_eur_cents",
+            value["revenueAtRiskEurCents"].as_u64().unwrap_or(0),
+        ),
+        (
+            "aeza_payment_deficit_eur_cents",
+            value["paymentDeficitEurCents"].as_u64().unwrap_or(0),
+        ),
+        (
+            "aeza_expected_loss_30d_eur_cents",
+            value["expectedLossEurCents"].as_u64().unwrap_or(0),
+        ),
+        (
+            "aeza_expected_loss_assessed_mrr_eur_cents",
+            value["expectedLossAssessedMonthlyRevenueEurCents"]
+                .as_u64()
+                .unwrap_or(0),
+        ),
+        (
+            "aeza_expected_loss_unassessed_mrr_eur_cents",
+            value["expectedLossUnassessedMonthlyRevenueEurCents"]
+                .as_u64()
+                .unwrap_or(0),
+        ),
+        (
+            "aeza_expected_loss_unassessed_customers",
+            value["expectedLossUnassessedCustomers"]
+                .as_u64()
+                .unwrap_or(0),
+        ),
+        (
+            "aeza_last_calculation_timestamp_seconds",
+            live.last_calculated_at.timestamp().max(0) as u64,
+        ),
+    ] {
+        output.push_str(&format!("# TYPE {name} gauge\n{name} {number}\n"));
+    }
+    for level in ["high", "medium", "low", "limited", "insufficient"] {
+        if level == "high" {
+            output.push_str("# TYPE aeza_customers_by_risk gauge\n");
+        }
+        output.push_str(&format!(
+            "aeza_customers_by_risk{{level=\"{level}\"}} {}\n",
+            value["customersByRisk"][level].as_u64().unwrap_or(0)
+        ));
+    }
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        output,
+    )
+}
+
+async fn v1_openapi() -> Json<serde_json::Value> {
+    Json(
+        serde_json::from_str(include_str!("../../../docs/openapi-v1.json"))
+            .expect("checked OpenAPI document"),
+    )
+}
+
+async fn v1_docs() -> axum::response::Html<&'static str> {
+    axum::response::Html(
+        r#"<!doctype html><html><head><title>Aeza API</title><link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"></head><body><div id="swagger-ui"></div><script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script><script>SwaggerUIBundle({url:'/api/v1/openapi.json',dom_id:'#swagger-ui'});</script></body></html>"#,
+    )
 }
 
 impl FromRef<AppState> for Arc<Auth> {
@@ -739,6 +1190,7 @@ struct LiveState {
     risks: Risks,
     /// Latest operation_logs id: every write to the client tables appends a row.
     log_id: Option<i64>,
+    last_calculated_at: DateTime<Utc>,
 }
 
 impl Live {
@@ -757,6 +1209,7 @@ impl Live {
                 dataset,
                 risks,
                 log_id,
+                last_calculated_at: Utc::now(),
             }),
         });
         let watcher = tokio::spawn(live.clone().watch(pool));
@@ -799,6 +1252,7 @@ impl Live {
         let mut risks = load_risks(pool, &state.settings).await?;
         set_settings_version(&mut risks, state.settings_metadata.version);
         self.replace_risks(&mut state, risks);
+        state.last_calculated_at = Utc::now();
         Ok(true)
     }
 
@@ -841,6 +1295,7 @@ impl Live {
             settings_metadata: &state.settings_metadata,
         });
         self.replace_risks(&mut state, risks);
+        state.last_calculated_at = Utc::now();
         Ok(state.settings_metadata.clone())
     }
 
@@ -2314,6 +2769,265 @@ async fn client_price_impact_demo(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v1_contract_preserves_source_service_statuses() {
+        for status in ["active", "suspended", "prolong_wait", "deleted", "blocked"] {
+            let dto = V1Service {
+                id: 10,
+                name: "vps-10".into(),
+                owner_id: 7,
+                payment_term: "month".into(),
+                auto_prolong: true,
+                created_at: Utc::now(),
+                expires_at: Utc::now(),
+                status: status.into(),
+                price: 990,
+            };
+            let json = serde_json::to_value(dto).unwrap();
+            assert_eq!(json["status"], status);
+            assert_eq!(json["ownerId"], 7);
+            assert_eq!(json["paymentTerm"], "month");
+            assert_eq!(json["autoProlong"], true);
+            assert!(json.get("accountId").is_none());
+        }
+    }
+
+    #[test]
+    fn v1_contract_preserves_transaction_status_and_type() {
+        for (status, operation_type) in [("performed", "prolong"), ("not_performed", "order")] {
+            let dto = V1Transaction {
+                id: 11,
+                amount: 500,
+                status: status.into(),
+                performed_at: None,
+                created_at: Utc::now(),
+                operation_type: operation_type.into(),
+                service_id: 10,
+            };
+            let json = serde_json::to_value(dto).unwrap();
+            assert_eq!(json["status"], status);
+            assert_eq!(json["type"], operation_type);
+            assert_eq!(json["serviceId"], 10);
+            assert!(json.get("kind").is_none());
+            assert!(json.get("billingType").is_none());
+        }
+    }
+
+    #[test]
+    fn recurring_revenue_uses_billable_current_statuses() {
+        for (status, expected) in [
+            ("active", 250),
+            ("suspended", 250),
+            ("prolong_wait", 0),
+            ("deleted", 0),
+            ("blocked", 0),
+        ] {
+            let service = ClientService {
+                id: "1".into(),
+                account_id: "1".into(),
+                tariff_product_id: None,
+                tariff_plan_key: None,
+                name: "service".into(),
+                region: None,
+                price_cents: 250,
+                renewal_price_cents: 250,
+                payment_term_seconds: 2592000.0,
+                renews_at: Utc::now(),
+                auto_renew: true,
+                status,
+            };
+            assert_eq!(recurring_service_revenue(&service), expected, "{status}");
+        }
+    }
+
+    #[test]
+    fn expected_loss_is_score_weighted_clamped_and_saturating() {
+        assert_eq!(modeled_expected_loss(10_000, 0), 0);
+        assert_eq!(modeled_expected_loss(10_000, 100), 10_000);
+        assert_eq!(modeled_expected_loss(101, 50), 51);
+        assert_eq!(modeled_expected_loss(10_000, -10), 0);
+        assert_eq!(modeled_expected_loss(10_000, 150), 10_000);
+        assert_eq!(modeled_expected_loss(-10_000, 100), 0);
+        assert_eq!(modeled_expected_loss(i64::MAX, 100), i64::MAX);
+    }
+
+    #[test]
+    fn summary_excludes_synthetic_customers_and_separates_loss_from_payment_deficit() {
+        let now = Utc::now();
+        let account = |id: &str, email: &str| ClientAccount {
+            id: id.into(),
+            name: email.into(),
+            email: email.into(),
+            balance_cents: 0,
+            total_replenished_cents: 0,
+        };
+        let service = |id: &str, account_id: &str, price_cents: i64, status| ClientService {
+            id: id.into(),
+            account_id: account_id.into(),
+            tariff_product_id: None,
+            tariff_plan_key: None,
+            name: "test-service".into(),
+            region: None,
+            price_cents,
+            renewal_price_cents: price_cents,
+            payment_term_seconds: 2_592_000.0,
+            renews_at: now,
+            auto_renew: true,
+            status,
+        };
+        let risk = |id: &str, score, level, assessment_status, upcoming, balance| SnapshotRisk {
+            account_id: id.into(),
+            score,
+            level,
+            factors: vec![],
+            upcoming_cents: upcoming,
+            monthly_cents: 0,
+            topups_cents: 0,
+            spendable_balance_cents: balance,
+            payment_coverage: None,
+            assessment_status,
+            available_factors: 0,
+            settings_version: 1,
+        };
+        let state = LiveState {
+            settings: SnapshotSettings::default(),
+            settings_metadata: SettingsMetadata::default(),
+            dataset: ClientDataset {
+                accounts: vec![
+                    account("1", "high@real.test"),
+                    account("2", "low@real.test"),
+                    account("3", "limited@real.test"),
+                    account("-1", "fixture@example.test"),
+                    account("4", "model@example.test"),
+                ],
+                services: vec![
+                    service("1", "1", 1_000, "active"),
+                    service("2", "1", 500, "suspended"),
+                    service("3", "1", 900, "blocked"),
+                    service("4", "1", 1_200, "cancelled"),
+                    service("5", "2", 900, "active"),
+                    service("6", "3", 700, "active"),
+                    service("7", "-1", 50, "active"),
+                    service("8", "4", 50, "active"),
+                ],
+                transactions: vec![],
+                as_of: now,
+                snapshots: vec![],
+            },
+            risks: [
+                (
+                    "1".into(),
+                    risk("1", 100, "high", "sufficient_data", 2_000, 1_000),
+                ),
+                ("2".into(), risk("2", 0, "low", "sufficient_data", 0, 0)),
+                ("3".into(), risk("3", 80, "limited", "limited_data", 500, 0)),
+                (
+                    "-1".into(),
+                    risk("-1", 100, "high", "sufficient_data", 0, 0),
+                ),
+                ("4".into(), risk("4", 100, "high", "sufficient_data", 0, 0)),
+            ]
+            .into(),
+            log_id: None,
+            last_calculated_at: now,
+        };
+
+        let result = summary(&state);
+        assert_eq!(result["customersTotal"], 3);
+        assert_eq!(result["customersByRisk"]["high"], 1);
+        assert_eq!(result["customersByRisk"]["low"], 1);
+        assert_eq!(result["customersByRisk"]["limited"], 1);
+        assert_eq!(result["revenueAtRiskEurCents"], 1_500);
+        assert_eq!(result["paymentDeficitEurCents"], 1_500);
+        assert_eq!(result["expectedLossEurCents"], 1_500);
+        assert_eq!(result["expectedLossAssessedMonthlyRevenueEurCents"], 2_400);
+        assert_eq!(result["expectedLossUnassessedMonthlyRevenueEurCents"], 700);
+        assert_eq!(result["expectedLossUnassessedCustomers"], 1);
+    }
+
+    #[test]
+    fn customer_query_accepts_documented_sort_and_filter_values_and_rejects_invalid_input() {
+        let query =
+            |sort: Option<&str>, direction: Option<&str>, risk: Option<&str>, page, limit| {
+                CustomerQuery {
+                    search: None,
+                    risk: risk.map(str::to_owned),
+                    sort: sort.map(str::to_owned),
+                    direction: direction.map(str::to_owned),
+                    page,
+                    limit,
+                }
+            };
+        for (field, sql) in [
+            ("id", "id"),
+            ("email", "lower(email)"),
+            ("balance", "balance"),
+            ("totalReplenished", "\"totalReplenished\""),
+            ("score", "id"),
+        ] {
+            assert_eq!(
+                validate_customer_query(&query(
+                    Some(field),
+                    Some("asc"),
+                    Some("all"),
+                    Some(1),
+                    Some(500)
+                )),
+                Ok(sql)
+            );
+        }
+        assert!(
+            validate_customer_query(&query(
+                Some("id"),
+                Some("desc"),
+                Some("high"),
+                Some(2),
+                Some(25)
+            ))
+            .is_ok()
+        );
+        for invalid in [
+            query(
+                Some("email); DROP TABLE accounts"),
+                Some("asc"),
+                None,
+                None,
+                None,
+            ),
+            query(Some("id"), Some("sideways"), None, None, None),
+            query(Some("id"), Some("asc"), Some("unknown"), None, None),
+            query(Some("id"), Some("asc"), None, Some(0), None),
+            query(Some("id"), Some("asc"), None, None, Some(501)),
+        ] {
+            assert_eq!(
+                validate_customer_query(&invalid),
+                Err(StatusCode::BAD_REQUEST)
+            );
+        }
+    }
+
+    #[test]
+    fn descending_score_sort_keeps_numeric_id_tie_breaking_stable() {
+        for direction in ["asc", "desc"] {
+            assert_eq!(
+                compare_customer_scores(50, 2, 50, 10, direction),
+                std::cmp::Ordering::Less
+            );
+            assert_eq!(
+                compare_customer_scores(50, 10, 50, 2, direction),
+                std::cmp::Ordering::Greater
+            );
+        }
+        assert_eq!(
+            compare_customer_scores(90, 10, 20, 2, "asc"),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_customer_scores(90, 10, 20, 2, "desc"),
+            std::cmp::Ordering::Less
+        );
+    }
 
     #[test]
     fn price_factor_requires_real_matched_and_repeated_evidence() {

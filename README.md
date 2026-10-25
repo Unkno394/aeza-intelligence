@@ -321,6 +321,30 @@ used to calculate them. Every route except
 `/api/auth/login`, `/callback`, `/logout` and `/method` requires a session (see
 [Authentication](#authentication)).
 
+### Public API v1
+
+| Method | Path | |
+|---|---|---|
+| POST | `/api/v1/auth/login` | Password login (`auth.mode = "password"`), body `{"username": email, "password": ...}` |
+| GET | `/api/v1/auth/me` | The signed-in admin |
+| POST | `/api/v1/auth/logout` | Ends the session |
+| GET | `/api/v1/customers` | Customers with Risk Scores; `search`, `risk`, `sort` (`score`, `id`, `email`, `balance`, `totalReplenished`), `direction`, `page`, `limit` (1–500) |
+| GET | `/api/v1/customers/{id}` | A customer with services, transactions, risk factors and explanations |
+| GET | `/api/v1/analytics/summary` | Risk counts, revenue at risk, payment deficit and the 30-day expected-loss scenario |
+| GET / PATCH | `/api/v1/model/settings` | Model settings; PATCH (operator, superadmin) saves and recalculates |
+| PUT | `/api/v1/source/snapshot` | Replaces the accounts, services and transactions atomically (operator, superadmin) and recalculates |
+| GET | `/metrics` | The summary as Prometheus gauges, without customer IDs |
+| GET | `/api/v1/docs` | Swagger UI of `docs/openapi-v1.json` |
+
+The session is the same `aeza_session` cookie as in the web UI. v1 leaves out
+customers with a negative ID or an `@example.test` address, so the bundled
+fixture shows no customers there; `PUT /api/v1/source/snapshot` refuses such
+rows. A snapshot is validated before anything is written (unique IDs and
+emails, existing parent rows, non-negative amounts, consistent transaction
+outcomes), and a failure while writing rolls back to the previous snapshot.
+`/metrics` and the documentation need no session; `/metrics` shows aggregate
+business figures, so expose port 8080 only where that is acceptable.
+
 ### Market monitoring
 
 `GET /api/market/prices/changes` lists competitor price changes of the last

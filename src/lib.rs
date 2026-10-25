@@ -28,6 +28,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("invalid dataset JSON: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("invalid dataset: {0}")]
+    InvalidDataset(String),
     #[error("load requires empty accounts, services and transactions tables")]
     TablesNotEmpty,
     #[error("rollback below version 104 could delete existing client or market data")]
