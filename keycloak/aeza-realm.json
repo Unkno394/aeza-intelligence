@@ -2,9 +2,12 @@
   "realm": "aeza",
   "enabled": true,
   "displayName": "Aéza Intelligence",
-  "loginWithEmailAllowed": true,
+  "sslRequired": "none",
   "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
   "resetPasswordAllowed": false,
+  "bruteForceProtected": true,
   "clients": [
     {
       "clientId": "aeza-intelligence",
@@ -13,11 +16,15 @@
       "protocol": "openid-connect",
       "publicClient": true,
       "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": ["http://127.0.0.1:8080/api/auth/callback"],
-      "webOrigins": ["http://127.0.0.1:8080"],
-      "attributes": {"pkce.code.challenge.method": "S256"}
+      "redirectUris": ["${KC_AEZA_PUBLIC_URL}/api/auth/callback"],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "${KC_AEZA_PUBLIC_URL}/"
+      }
     }
   ],
   "users": [

@@ -35,11 +35,14 @@ Code + PKCE) with any provider that publishes
 `/.well-known/openid-configuration`:
 
 The Compose stack includes a local Keycloak provider at
-`http://127.0.0.1:8081`. Its Aéza realm, public PKCE client, and
-`analyst@aeza.local` account are imported on first start. Set
-`KEYCLOAK_ADMIN_PASSWORD` and `SSO_USER_PASSWORD` in `.env`; the SSO button
-then signs in as `analyst` using `SSO_USER_PASSWORD`. The Keycloak admin console
-uses username `admin` and `KEYCLOAK_ADMIN_PASSWORD`.
+`http://127.0.0.1:8081` (`KEYCLOAK_PORT`; `KEYCLOAK_URL` when it is opened at
+another address), and by default the API signs in through it. Its realm
+`aeza`, the public PKCE client `aeza-intelligence` and the
+`analyst@aeza.local` account are imported from `keycloak/aeza-realm.json` on
+first start. Set `KEYCLOAK_ADMIN_PASSWORD` and `SSO_USER_PASSWORD` in `.env`;
+the SSO button then signs in as `analyst` using `SSO_USER_PASSWORD`. Both are
+read only when the `keycloak` volume is created. To use another provider
+instead:
 
 1. Register a client at the provider with redirect URI
    `<PUBLIC_URL>/api/auth/callback` and post-logout redirect URI `<PUBLIC_URL>/`.
@@ -67,33 +70,21 @@ the local credentials or OIDC settings. For local development and the `scripts/c
 call the API directly, start it with `AUTH_DISABLED=true`: every request then
 acts as a superadmin, so never use it on a reachable host.
 
-#### Check the login locally
+#### Accounts and the login check
 
-`docker-compose.dev-auth.yml` adds a local Keycloak (`127.0.0.1:5556`,
-`KEYCLOAK_PORT`) with the realm `aeza` and the client `aeza-intelligence`
-from `dev/keycloak/aeza-realm.json`, and points `api` at it in place of the
-`OIDC_*` and `AUTH_DISABLED` values from `.env`. Sign-in is a real
-email + password form; Keycloak keeps its accounts in the `keycloak-data`
-volume.
+Keycloak keeps its accounts in the `keycloak` volume. `scripts/auth_user.sh`
+creates the Keycloak account and the `public.admins` row together:
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.dev-auth.yml up -d
 bash scripts/auth_user.sh add me@example.com operator "Имя Фамилия"   # asks for a password
-```
-
-Then open http://127.0.0.1:8080: it goes straight to the Keycloak form; sign in
-with that email and password. `scripts/auth_user.sh` creates the Keycloak account and the
-`public.admins` row together:
-
-```sh
 bash scripts/auth_user.sh role me@example.com viewer   # viewer | operator | superadmin
 bash scripts/auth_user.sh passwd me@example.com
 bash scripts/auth_user.sh disable me@example.com       # enable to restore
 bash scripts/auth_user.sh list
 ```
 
-The Keycloak admin console is at http://127.0.0.1:5556/admin
-(`KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD`, `admin` / `admin` by default).
+The Keycloak admin console is at http://127.0.0.1:8081/admin
+(`KEYCLOAK_ADMIN`, `admin` by default, and `KEYCLOAK_ADMIN_PASSWORD`).
 An account created there also needs a `public.admins` row (`auth_user.sh role`
 does not create one; use `add`, or the SQL above).
 
@@ -108,9 +99,11 @@ and that deactivation ends it on the next request and closes an open WebSocket
 within 30 seconds. `--no-up` checks an already running stack, `--build`
 rebuilds the images first, `--cleanup` deactivates the test accounts.
 
-With dev auth on, `scripts/check_api.sh` and the other scripts that call
-`127.0.0.1:3000` get 401; `docker compose up -d api` restarts the API with the
-settings from `.env` again.
+The check restarts the API with the bundled Keycloak and authentication on,
+whatever `OIDC_*` and `AUTH_DISABLED` say in `.env`; `scripts/check_api.sh` and
+the other scripts that call `127.0.0.1:3000` then get 401, and
+`docker compose up -d api` restarts the API with the settings from `.env`
+again.
 
 ## Inputs
 
@@ -266,7 +259,7 @@ cross-customer patterns are served by `GET /api/client/historical/patterns`.
 
 Set `DATABASE_URL` in `.env` to the existing `aeza_intelligence` database and
 run `bash scripts/migrate_database.sh`. This applies the market migrations
-(`001`–`004`) and the customer adapter migrations (`100`–`114`) to that same
+(`001`–`004`) and the customer adapter migrations (`100`–`116`) to that same
 database. Customer tables live in `public`; market tables live in
 `market_intelligence`. The script verifies that all required tables exist and
 prints row counts. It does not create or replace a database. Docker Compose

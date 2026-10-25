@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Accounts for the local Keycloak (docker-compose.dev-auth.yml) and their
+# Accounts for the bundled Keycloak (docker-compose.yml) and their
 # access in public.admins. Keycloak checks the password; public.admins decides
 # whether the email may enter and with which role.
 #
@@ -28,13 +28,12 @@ fi
 
 usage() { sed -n '6,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
-compose=(docker compose -f docker-compose.yml -f docker-compose.dev-auth.yml)
 kcadm() {
-  "${compose[@]}" exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" --config /tmp/kcadm.config
+  docker compose exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" --config /tmp/kcadm.config
 }
 kc_login() {
-  if ! "${compose[@]}" ps --status running --quiet keycloak | grep -q .; then
-    echo 'Keycloak is not running: docker compose -f docker-compose.yml -f docker-compose.dev-auth.yml up -d' >&2
+  if ! docker compose ps --status running --quiet keycloak | grep -q .; then
+    echo 'Keycloak is not running: docker compose up -d keycloak' >&2
     exit 1
   fi
   kcadm config credentials --server http://localhost:8080 --realm master \

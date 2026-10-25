@@ -132,8 +132,14 @@ impl Auth {
             eprintln!("WARNING: authentication is disabled, every request acts as superadmin");
             return Ok(Arc::new(Self { oidc: None, local: None }));
         }
-        let local = if let (Some(user), Some(password)) = (args.local_admin_user.as_ref(), args.local_admin_password.as_ref()) {
-            anyhow::ensure!(!user.is_empty() && password.len() >= 16, "LOCAL_ADMIN_USER is required and LOCAL_ADMIN_PASSWORD must be at least 16 characters");
+        // Compose passes unset variables as empty strings: both empty means no local login.
+        let user = args.local_admin_user.as_ref().filter(|value| !value.is_empty());
+        let password = args.local_admin_password.as_ref().filter(|value| !value.is_empty());
+        let local = if user.is_some() || password.is_some() {
+            let (Some(user), Some(password)) = (user, password) else {
+                anyhow::bail!("LOCAL_ADMIN_USER and LOCAL_ADMIN_PASSWORD must be set together");
+            };
+            anyhow::ensure!(password.len() >= 16, "LOCAL_ADMIN_PASSWORD must be at least 16 characters");
             anyhow::ensure!((1..=720).contains(&args.session_hours), "SESSION_HOURS must be between 1 and 720");
             Some(Local {
                     user: user.clone(),

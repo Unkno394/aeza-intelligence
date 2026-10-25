@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end check of the OIDC login against the local Keycloak
-# (docker-compose.dev-auth.yml). See README "Check the login locally".
+# End-to-end check of the OIDC login against the bundled Keycloak
+# (docker-compose.yml). See README "Check the login locally".
 #
 #   bash scripts/check_auth.sh            start keycloak + api + frontend, create test accounts, run every check
 #   bash scripts/check_auth.sh --build    the same, rebuilding the images first
@@ -31,7 +31,10 @@ if [[ -f .env ]]; then
 fi
 : "${DATABASE_URL:?Set DATABASE_URL in .env}"
 export PUBLIC_URL="http://127.0.0.1:${FRONTEND_PORT:-8080}"
-export KEYCLOAK_PORT="${KEYCLOAK_PORT:-5556}"
+export KEYCLOAK_PORT="${KEYCLOAK_PORT:-8081}"
+# The API runs against the bundled Keycloak for the check, whatever .env says.
+export KEYCLOAK_URL="http://127.0.0.1:$KEYCLOAK_PORT"
+export OIDC_ISSUER="$KEYCLOAK_URL/realms/aeza" OIDC_CLIENT_ID=aeza-intelligence OIDC_CLIENT_SECRET= AUTH_DISABLED=false
 export CHECK_PASSWORD='auth-check-Passw0rd'
 psql_q() { psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 "$@"; }
 
@@ -46,8 +49,7 @@ SQL
 fi
 
 if (( up )); then
-  docker compose -f docker-compose.yml -f docker-compose.dev-auth.yml \
-    up -d --wait "${build[@]}" keycloak api frontend
+  docker compose up -d --wait "${build[@]}" keycloak api frontend
 fi
 
 # Test accounts, all with the same password. auth-nobody has no public.admins
@@ -77,7 +79,7 @@ import urllib.parse
 MODE = sys.argv[1]
 PUBLIC_URL = os.environ['PUBLIC_URL']
 FRONT = urllib.parse.urlsplit(PUBLIC_URL)
-OIDC_PREFIX = f"http://127.0.0.1:{os.environ['KEYCLOAK_PORT']}/realms/aeza"
+OIDC_PREFIX = os.environ['OIDC_ISSUER']
 PASSWORD = os.environ['CHECK_PASSWORD']
 FOREIGN = 'http://evil.example'
 failures = []
@@ -125,12 +127,12 @@ def wait_for_api():
                 return
             if status == 200:
                 sys.exit('market_api answers without a session: AUTH_DISABLED is still on. '
-                         'Start it with docker-compose.dev-auth.yml (drop --no-up).')
+                         'Run the check without --no-up to restart it with OIDC.')
             last = f'HTTP {status}'
         except OSError as error:
             last = str(error)
         time.sleep(2)
-    sys.exit(f'market_api did not come up with OIDC in 120 s ({last}); see docker compose logs api oidc')
+    sys.exit(f'market_api did not come up with OIDC in 120 s ({last}); see docker compose logs api keycloak')
 
 
 def start_login(jar, return_to='/'):
