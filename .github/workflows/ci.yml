@@ -67,4 +67,4 @@ jobs:
       - name: docker-compose.yml is valid
         run: docker compose config --quiet
         env:
-          DATABASE_URL: postgres://user@127.0.0.1:5432/db
+          POSTGRES_PASSWORD: ci

@@ -76,8 +76,9 @@ function serve(req,res){
  if(req.headers.host!==publicUrl.host)return redirectToPublicUrl(req,res);
  const pathname=new URL(req.url,'http://localhost').pathname;
  if(pathname.startsWith('/api/market/v1/')||pathname.startsWith('/api/market/v2/'))return void authorized(req).then(ok=>{if(ok)return proxy(req,res,'http://simulator:8091');res.writeHead(401,{'content-type':'application/json'});res.end('{"error":"unauthorized"}');});
- // /metrics is market_api's Prometheus endpoint, outside /api like in the v1 contract.
- if(pathname.startsWith('/api/')||pathname==='/metrics')return proxy(req,res,API);
+ // /metrics is market_api's Prometheus endpoint, outside /api like in the v1 contract
+ // (/metics is the spelling of the task statement).
+ if(pathname.startsWith('/api/')||pathname==='/metrics'||pathname==='/metics')return proxy(req,res,API);
  let file;
  try{file=path.resolve(root,`.${decodeURIComponent(pathname)}`);}catch{res.writeHead(400);res.end();return;}
  if(!file.startsWith(`${root}${path.sep}`)&&file!==root){res.writeHead(403);res.end();return;}

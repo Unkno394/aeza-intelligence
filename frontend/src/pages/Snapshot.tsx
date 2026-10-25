@@ -228,7 +228,7 @@ export default function Snapshot(){
     <div className="snapshot-overview-content">
      <div className="snapshot-score-wrap">
       <div className={`snapshot-score-gauge ${risk.level}`} style={{'--score':`${risk.score}%`,'--score-color':colors[risk.level]} as CSSProperties}>
-       <div><strong>{risk.score}</strong><span>из 100</span></div>
+       {risk.level==='insufficient'?<div><strong>—</strong><span>нет оценки</span></div>:<div><strong>{risk.score}</strong><span>из 100</span></div>}
       </div>
       <Badge level={risk.level}/>
      </div>
@@ -270,7 +270,7 @@ export default function Snapshot(){
    <Panel title="Главные причины риска" subtitle="Показаны факторы с наибольшим вкладом в Risk Score" className="snapshot-reasons">
     {topFactors.length===0?<div className="snapshot-empty-note"><CheckCircle2 size={17}/> Нет факторов с положительным вкладом в текущую оценку.</div>:
      <div className="snapshot-factor-list">{topFactors.map(renderFactor)}</div>}
-    <details className="snapshot-all-factors"><summary>Все 5 факторов и метод расчёта <ChevronDown size={15}/></summary>
+    <details className="snapshot-all-factors"><summary>Все {risk.factors.length} факторов и метод расчёта <ChevronDown size={15}/></summary>
      <div className="snapshot-factor-list">{risk.factors.map(renderFactor)}</div>
      <p className="snapshot-method-note">Баллы показывают вклад признака в индекс, а не вероятность ухода. Настроенные веса нормализуются при расчёте: платежи {settings.weights.paymentCoverage}, без автопродления {settings.weights.noAutoProlong}, prolong_wait {settings.weights.prolongWait}, подтверждённые отказы {settings.weights.failedProlong}, истекающая выручка {settings.weights.expiringRevenue}. Неопределённый исход исключается.</p>
     </details>
@@ -308,7 +308,7 @@ export default function Snapshot(){
    <summary><span><strong>Сравнение с другими клиентами</strong><small>Почему профиль необычен для похожей группы · отдельный анализ, не часть Risk Score</small></span><ChevronDown size={18}/></summary>
    <div className="snapshot-analysis-content">
     {report?<>
-     <div className="snapshot-risk-vs-anomaly"><div><small>Текущий риск</small><strong>{risk.score}/100 · {({low:'низкий',medium:'средний',high:'высокий',limited:'ограниченные данные',insufficient:'недостаточно данных'} as const)[risk.level]}</strong><p>Вклад известных проблем в настраиваемый индекс · доступно факторов: {risk.availableFactors} из {risk.factors.length}.</p></div><div><small>Статистическая необычность</small><strong>Махаланобис {report.mahalanobis?.toFixed(2)??'—'}</strong><p>Насколько профиль необычен как сочетание признаков; показатель не направлен только в сторону риска.</p></div></div>
+     <div className="snapshot-risk-vs-anomaly"><div><small>Текущий риск</small><strong>{risk.level==='insufficient'?'Оценки нет':`${risk.score}/100`} · {({low:'низкий',medium:'средний',high:'высокий',limited:'ограниченные данные',insufficient:'недостаточно данных'} as const)[risk.level]}</strong><p>Вклад известных проблем в настраиваемый индекс · доступно факторов: {risk.availableFactors} из {risk.factors.length}.</p></div><div><small>Статистическая необычность</small><strong>Махаланобис {report.mahalanobis?.toFixed(2)??'—'}</strong><p>Насколько профиль необычен как сочетание признаков; показатель не направлен только в сторону риска.</p></div></div>
      <div className="snapshot-comparison-stats"><div><small>Клиентов в сравнительной базе</small><strong>{rustReport?.clients.length??0}</strong></div><div><small>Похожих клиентов · максимум 3</small><strong>{peerClients.length}</strong></div><div><small>Среднее расстояние до ближайших по профилю</small><strong>{report.neighbourDistance?.toFixed(2)??'—'}</strong></div></div>
      <p className="snapshot-analysis-note snapshot-comparison-window">Сравнение рассчитано на фиксированном горизонте 7 дней; текущий Risk Score использует окно {settings.renewalWindowDays} дней. Уверенность не калибруется: ниже показаны фактические размеры базы и группы.</p>
      <Panel title="Почему клиент выделяется среди похожих" subtitle="Группа подобрана по числу услуг, месячным расходам и доле коротких периодов оплаты">

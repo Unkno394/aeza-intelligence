@@ -2,7 +2,7 @@
 #
 #   docker compose up -d --build        # then open server.public_url of config.toml
 #
-# Order: existing PostgreSQL → migrate → seed (skipped when clients exist) →
+# Order: db (PostgreSQL) → migrate → seed (skipped when clients exist) →
 # api, snapshots, market collectors, simulator → frontend on port 8080.
 # Optional profiles: sso (Keycloak for auth.mode = "oidc") and demo.
 #
@@ -11,7 +11,8 @@
 
 name: aeza-intelligence
 
-x-database-url: &database-url ${DATABASE_URL:?Set DATABASE_URL in .env}
+# The bundled db service unless DATABASE_URL names another PostgreSQL.
+x-database-url: &database-url ${DATABASE_URL:-postgres://aeza:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@127.0.0.1:5433/aeza}
 
 # A missing config.toml is an error instead of an empty directory in its place.
 x-config: &config
@@ -37,6 +38,25 @@ x-app: &app
       condition: service_completed_successfully
 
 services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aeza
+      POSTGRES_DB: aeza
+      # Read only when the db-data volume is created.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    # The application services use the host network and reach it here.
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aeza -d aeza"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
   # OIDC provider for auth.mode = "oidc": docker compose --profile sso up -d.
   # The realm, the client and the analyst@aeza.local account are imported from
   # keycloak/ on the first start; afterwards Keycloak keeps its accounts in the
@@ -83,7 +103,9 @@ services:
   migrate:
     <<: *app
     command: ["migrate"]
-    depends_on: []
+    depends_on:
+      db:
+        condition: service_healthy
     restart: "on-failure:5"
 
   seed:
@@ -189,4 +211,5 @@ services:
       - simulator
 
 volumes:
+  db-data:
   keycloak:

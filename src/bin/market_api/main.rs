@@ -688,6 +688,8 @@ fn router(state: AppState) -> Router {
         .route("/api/v1/docs", get(v1_docs))
         .route("/api/v1/openapi.json", get(v1_openapi))
         .route("/metrics", get(v1_metrics))
+        // The task statement spells the endpoint /metics; both answer.
+        .route("/metics", get(v1_metrics))
         .with_state(state)
 }
 
@@ -748,8 +750,10 @@ fn compare_customer_scores(
     scores.then_with(|| left_id.cmp(&right_id))
 }
 
-fn visible_customer(id: &str, email: &str) -> bool {
-    id.parse::<i64>().is_ok_and(|id| id >= 0) && !email.ends_with("@example.test")
+/// Synthetic rows (demo stream, model fixtures, price scenarios) have negative
+/// IDs. The email domain says nothing: the given dataset uses @example.test.
+fn visible_customer(id: &str) -> bool {
+    id.parse::<i64>().is_ok_and(|id| id >= 0)
 }
 
 fn recurring_service_revenue(service: &ClientService) -> i64 {
@@ -784,7 +788,7 @@ async fn v1_customers(
         "SELECT id, email, balance, \"withdrawBalance\" AS withdraw_balance, \
          \"totalReplenished\" AS total_replenished, \"bonusBalance\" AS bonus_balance, \
          \"bonusState\" AS bonus_state FROM public.accounts \
-         WHERE id >= 0 AND email NOT LIKE '%@example.test' \
+         WHERE id >= 0 \
          AND ($1::text IS NULL OR id::text ILIKE '%' || $1 || '%' OR email ILIKE '%' || $1 || '%') \
          ORDER BY {order} {direction}, id {direction}",
         order = sql_order,
@@ -838,7 +842,7 @@ async fn v1_customer(
         "SELECT id, email, balance, \"withdrawBalance\" AS withdraw_balance, \
          \"totalReplenished\" AS total_replenished, \"bonusBalance\" AS bonus_balance, \
          \"bonusState\" AS bonus_state FROM public.accounts \
-         WHERE id = $1 AND id >= 0 AND email NOT LIKE '%@example.test'",
+         WHERE id = $1 AND id >= 0",
     )
     .bind(id)
     .fetch_optional(&state.pool)
@@ -886,7 +890,7 @@ fn summary(live: &LiveState) -> serde_json::Value {
     let mut unassessed_customers = 0_usize;
     let mut customers = 0_usize;
     for account in &live.dataset.accounts {
-        if !visible_customer(&account.id, &account.email) {
+        if !visible_customer(&account.id) {
             continue;
         }
         let Some(risk) = live.risks.get(&account.id) else {
@@ -983,7 +987,7 @@ async fn v1_source_snapshot(
         || dataset
             .accounts
             .iter()
-            .any(|account| account.id < 0 || account.email.ends_with("@example.test"))
+            .any(|account| account.id < 0)
         || dataset.services.iter().any(|service| service.id < 0)
         || dataset
             .transactions
@@ -1688,20 +1692,19 @@ async fn client_data_quality(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let row = sqlx::query(
         "SELECT \
-         (SELECT count(*) FROM public.accounts WHERE id >= 0 \
-          AND email NOT LIKE '%@example.test') AS real_accounts, \
+         (SELECT count(*) FROM public.accounts WHERE id >= 0) AS real_accounts, \
          (SELECT count(DISTINCT s.account_id) FROM public.client_snapshots s \
           JOIN public.accounts a ON a.id = s.account_id \
-          WHERE a.id >= 0 AND a.email NOT LIKE '%@example.test' \
+          WHERE a.id >= 0 \
             AND s.observed_on = (now() AT TIME ZONE 'UTC')::date) AS today_accounts, \
          (SELECT count(*) FROM (SELECT s.account_id FROM public.client_snapshots s \
           JOIN public.accounts a ON a.id = s.account_id \
-          WHERE a.id >= 0 AND a.email NOT LIKE '%@example.test' \
+          WHERE a.id >= 0 \
           GROUP BY s.account_id \
           HAVING count(*) >= 10 AND max(s.observed_on) - min(s.observed_on) >= 30) ready) AS real_accounts_with_history, \
          (SELECT max(s.observed_on) FROM public.client_snapshots s \
           JOIN public.accounts a ON a.id = s.account_id \
-          WHERE a.id >= 0 AND a.email NOT LIKE '%@example.test') AS latest_real_snapshot, \
+          WHERE a.id >= 0) AS latest_real_snapshot, \
          (SELECT coalesce(jsonb_agg(jsonb_build_object(\
               'serviceName', service_name, 'services', service_count, 'accounts', account_count) \
               ORDER BY service_count DESC), '[]'::jsonb) \
@@ -1709,7 +1712,6 @@ async fn client_data_quality(
                        count(DISTINCT s.\"ownerId\")::bigint AS account_count \
                 FROM public.services s JOIN public.accounts a ON a.id = s.\"ownerId\" \
                 WHERE s.tariff_product_id IS NULL AND a.id >= 0 \
-                  AND a.email NOT LIKE '%@example.test' \
                 GROUP BY s.name ORDER BY count(*) DESC LIMIT 100) unlinked) \
           AS unlinked_service_names, \
          (SELECT count(*) FROM public.transactions WHERE type = 'prolong' \
@@ -1718,11 +1720,10 @@ async fn client_data_quality(
           AND status = 'performed') AS confirmed_successful_prolongs, \
          (SELECT count(*) FROM public.services s \
           JOIN public.accounts a ON a.id = s.\"ownerId\" \
-          WHERE s.tariff_product_id IS NULL AND a.id >= 0 \
-            AND a.email NOT LIKE '%@example.test') AS unlinked_services, \
+          WHERE s.tariff_product_id IS NULL AND a.id >= 0) AS unlinked_services, \
          (SELECT count(*) FROM public.client_snapshots s \
           JOIN public.accounts a ON a.id = s.account_id \
-          WHERE a.id >= 0 AND a.email NOT LIKE '%@example.test' \
+          WHERE a.id >= 0 \
             AND NOT s.model_state ? 'event_log_cursor') AS snapshots_without_event_cursor, \
          (SELECT count(*) FROM public.operation_logs WHERE entity IN ('service', 'transaction') \
           AND \"occurredAt\" >= now() - interval '7 days') AS recent_behavior_events",
@@ -2853,7 +2854,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_excludes_synthetic_customers_and_separates_loss_from_payment_deficit() {
+    fn summary_excludes_negative_id_fixtures_and_separates_loss_from_payment_deficit() {
         let now = Utc::now();
         let account = |id: &str, email: &str| ClientAccount {
             id: id.into(),
@@ -2933,15 +2934,17 @@ mod tests {
             last_calculated_at: now,
         };
 
+        // -1 is a synthetic fixture; 4 is a real customer despite its
+        // @example.test address, like every customer of the given dataset.
         let result = summary(&state);
-        assert_eq!(result["customersTotal"], 3);
-        assert_eq!(result["customersByRisk"]["high"], 1);
+        assert_eq!(result["customersTotal"], 4);
+        assert_eq!(result["customersByRisk"]["high"], 2);
         assert_eq!(result["customersByRisk"]["low"], 1);
         assert_eq!(result["customersByRisk"]["limited"], 1);
-        assert_eq!(result["revenueAtRiskEurCents"], 1_500);
+        assert_eq!(result["revenueAtRiskEurCents"], 1_550);
         assert_eq!(result["paymentDeficitEurCents"], 1_500);
-        assert_eq!(result["expectedLossEurCents"], 1_500);
-        assert_eq!(result["expectedLossAssessedMonthlyRevenueEurCents"], 2_400);
+        assert_eq!(result["expectedLossEurCents"], 1_550);
+        assert_eq!(result["expectedLossAssessedMonthlyRevenueEurCents"], 2_450);
         assert_eq!(result["expectedLossUnassessedMonthlyRevenueEurCents"], 700);
         assert_eq!(result["expectedLossUnassessedCustomers"], 1);
     }

@@ -1167,11 +1167,10 @@ async fn competitor_price_changes_and_source_status_are_reported(pool: PgPool) {
 
 // ------------------------------------------------------------------- v1
 
-/// scripts/fixtures/data.json with real-looking addresses: v1 hides
-/// @example.test customers, so the fixture itself would show none.
+/// The fixture as uploaded through the API. Its @example.test addresses are
+/// real customers to v1: only negative IDs mark synthetic rows.
 fn real_snapshot() -> Value {
-    let raw = include_str!("../../../scripts/fixtures/data.json").replace("@example.test", "@client.test");
-    serde_json::from_str(&raw).unwrap()
+    serde_json::from_str(include_str!("../../../scripts/fixtures/data.json")).unwrap()
 }
 
 async fn v1_login(api: &Api, email: &str) -> Browser {
@@ -1235,7 +1234,7 @@ async fn v1_snapshot_upload_drives_customers_summary_and_metrics(pool: PgPool) {
     let filtered = api.get(&format!("/api/v1/customers?risk={level}&limit=500"), &mut viewer).await.json();
     assert!(filtered["items"].as_array().unwrap().iter().all(|item| item["risk"]["level"] == level.as_str()));
     let found = api.get("/api/v1/customers?search=user-0007", &mut viewer).await.json();
-    assert_eq!(found["items"][0]["account"]["email"], "user-0007@client.test");
+    assert_eq!(found["items"][0]["account"]["email"], "user-0007@example.test");
     for invalid in ["sort=name", "direction=up", "risk=extreme", "page=0", "limit=501"] {
         assert_eq!(api.get(&format!("/api/v1/customers?{invalid}"), &mut viewer).await.status, 400, "{invalid}");
     }
@@ -1262,6 +1261,8 @@ async fn v1_snapshot_upload_drives_customers_summary_and_metrics(pool: PgPool) {
     assert!(metrics.body.contains("aeza_customers_total 10\n"), "{}", metrics.body);
     assert!(metrics.body.contains(&format!("aeza_expected_loss_30d_eur_cents {}\n", summary["expectedLossEurCents"])));
     assert!(!metrics.body.contains("account"), "no customer IDs in labels");
+    let alias = api.get("/metics", &mut Browser::default()).await;
+    assert_eq!(alias.body, metrics.body, "/metics is the same endpoint");
 
     // A second upload replaces the snapshot instead of adding to it.
     let mut smaller = real_snapshot();
@@ -1281,7 +1282,7 @@ async fn v1_rejects_invalid_snapshots_and_keeps_the_previous_one(pool: PgPool) {
     assert_eq!(put_snapshot(&api, &mut operator, real_snapshot()).await.status, 200);
 
     let mut synthetic = real_snapshot();
-    synthetic["accounts"][0]["email"] = json!("someone@example.test");
+    synthetic["accounts"][0]["id"] = json!(-5);
     let mut orphan = real_snapshot();
     orphan["services"][0]["ownerId"] = json!(999_999);
     let mut empty = real_snapshot();
@@ -1343,4 +1344,47 @@ async fn v1_documentation_is_public(pool: PgPool) {
     assert!(docs.body.contains("SwaggerUIBundle") && docs.body.contains("/api/v1/openapi.json"));
     let spec = api.get("/api/v1/openapi.json", &mut anonymous).await.json();
     assert!(spec["paths"]["/api/v1/customers"]["get"].is_object());
+}
+
+// ----------------------------------------------------------- live updates
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn data_and_settings_changes_reach_open_sockets(pool: PgPool) {
+    PgAdapter::from_pool(pool.clone())
+        .load(&Dataset::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/fixtures/data.json")).unwrap())
+        .await
+        .unwrap();
+    let api = Api::start(pool, Mode::Disabled).await;
+    let mut watcher = api.socket(&Browser::default(), None).await.unwrap();
+    let snapshot = next_message(&mut watcher).await.unwrap();
+    assert_eq!(snapshot["type"], "snapshot");
+
+    // A write to the client tables: the dataset and the changed scores follow.
+    sqlx::query("UPDATE public.accounts SET balance = 0 WHERE id = 1")
+        .execute(&api.pool)
+        .await
+        .unwrap();
+    let mut seen = Vec::new();
+    while !(seen.contains(&"dataset".to_owned())) {
+        let message = next_message(&mut watcher).await.expect("socket stays open");
+        seen.push(message["type"].as_str().unwrap().to_owned());
+        if message["type"] == "dataset" {
+            let account = message["dataset"]["accounts"].as_array().unwrap().iter().find(|account| account["id"] == "1").unwrap().clone();
+            assert_eq!(account["balanceCents"], 0);
+        }
+    }
+
+    // New coefficients from another session reach this one.
+    let mut editor = api.socket(&Browser::default(), None).await.unwrap();
+    let mut settings = next_message(&mut editor).await.unwrap()["settings"].clone();
+    settings["weights"]["paymentCoverage"] = json!(60);
+    let update = json!({"type": "updateSettings", "requestId": "s1", "settings": settings});
+    editor.send(tungstenite::Message::Text(update.to_string().into())).await.unwrap();
+    loop {
+        let message = next_message(&mut watcher).await.expect("socket stays open");
+        if message["type"] == "settings" {
+            assert_eq!(message["settings"]["weights"]["paymentCoverage"], 60.0);
+            break;
+        }
+    }
 }
