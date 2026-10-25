@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Accounts for the bundled Keycloak (docker-compose.yml) and their
-# access in public.admins. Keycloak checks the password; public.admins decides
-# whether the email may enter and with which role.
+# Admin accounts: a row in public.admins decides whether the email may enter
+# and with which role. The password is stored in that row when DEFAULT_AUTH=true
+# (set through the API image, Argon2), otherwise in the bundled Keycloak.
 #
 #   bash scripts/auth_user.sh add <email> <viewer|operator|superadmin> [name]   asks for the password
 #   bash scripts/auth_user.sh role <email> <viewer|operator|superadmin>
@@ -10,9 +10,7 @@
 #   bash scripts/auth_user.sh enable <email>
 #   bash scripts/auth_user.sh list
 #
-# AUTH_USER_PASSWORD sets the password without a prompt. For scripts/check_auth.sh:
-# AUTH_USER_UNVERIFIED=1 leaves the email unconfirmed, AUTH_USER_NO_ADMIN=1
-# creates only the Keycloak account.
+# AUTH_USER_PASSWORD sets the password without a prompt.
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,6 +40,26 @@ kc_login() {
 }
 kc_user_id() {
   kcadm get users -r aeza -q "email=$1" -q exact=true --fields id --format csv --noquotes | head -1
+}
+default_auth() { [[ "${DEFAULT_AUTH:-false}" =~ ^(true|1|yes|on)$ ]]; }
+# DEFAULT_AUTH: hashes the password into public.admins with the API image.
+db_set_password() {
+  (( ${#password} >= 16 )) || { echo 'the password must be at least 16 characters' >&2; exit 1; }
+  printf '%s\n' "$password" |
+    docker compose run --rm --no-deps -T migrate set-password "$1" >/dev/null
+}
+kc_set_account() {
+  # $1 email, $2 name
+  kc_login
+  local first="${2%% *}" last="${2#* }" id
+  local fields=(-s "email=$1" -s emailVerified=true -s enabled=true -s "firstName=$first" -s "lastName=${last:-$first}")
+  id="$(kc_user_id "$1")"
+  if [[ -n "$id" ]]; then
+    kcadm update "users/$id" -r aeza "${fields[@]}"
+  else
+    kcadm create users -r aeza -s "username=$1" "${fields[@]}" >/dev/null 2>&1
+  fi
+  kcadm set-password -r aeza --username "$1" --new-password "$password"
 }
 sql() {
   psql "$DATABASE_URL" -X -q -At -v ON_ERROR_STOP=1 "$@"
@@ -79,23 +97,14 @@ case "$command" in
     check_role "$role"
     name="${4:-${email%@*}}"
     read_password
-    kc_login
-    verified=true
-    [[ "${AUTH_USER_UNVERIFIED:-}" == 1 ]] && verified=false
-    first="${name%% *}"
-    last="${name#* }"
-    fields=(-s "email=$email" -s "emailVerified=$verified" -s enabled=true -s "firstName=$first" -s "lastName=${last:-$first}")
-    id="$(kc_user_id "$email")"
-    if [[ -n "$id" ]]; then
-      kcadm update "users/$id" -r aeza "${fields[@]}"
+    set_admin "$email" "$role" true "$name"
+    if default_auth; then
+      db_set_password "$email"
+      echo "$email: password login ready, role $role"
     else
-      kcadm create users -r aeza -s "username=$email" "${fields[@]}" >/dev/null 2>&1
+      kc_set_account "$email" "$name"
+      echo "$email: Keycloak account ready, role $role"
     fi
-    kcadm set-password -r aeza --username "$email" --new-password "$password"
-    if [[ "${AUTH_USER_NO_ADMIN:-}" != 1 ]]; then
-      set_admin "$email" "$role" true "$name"
-    fi
-    echo "$email: Keycloak account ready, role $role"
     ;;
   role)
     role="${3:-}"
@@ -110,8 +119,12 @@ SQL
   passwd)
     [[ -n "$email" ]] || usage
     read_password
-    kc_login
-    kcadm set-password -r aeza --username "$email" --new-password "$password"
+    if default_auth; then
+      db_set_password "$email"
+    else
+      kc_login
+      kcadm set-password -r aeza --username "$email" --new-password "$password"
+    fi
     echo "$email: password changed"
     ;;
   disable|enable)

@@ -24,12 +24,25 @@ x-app: &app
       condition: service_completed_successfully
 
 services:
-  # Local OIDC provider. The realm, the client and the analyst@aeza.local
+  # Local OIDC provider, started with COMPOSE_PROFILES=sso (not needed with
+  # DEFAULT_AUTH=true). The realm, the client and the analyst@aeza.local
   # account are imported from keycloak/ on the first start; afterwards
   # Keycloak keeps its accounts in the keycloak volume (scripts/auth_user.sh).
   keycloak:
     image: quay.io/keycloak/keycloak:26.8.1
+    profiles: ["sso"]
     restart: unless-stopped
+    # Compose interpolates services outside the active profiles too, so the
+    # passwords are checked here instead of with ${VAR:?}: DEFAULT_AUTH setups
+    # need not set them, and Keycloak never starts with an empty one.
+    entrypoint:
+      - bash
+      - -c
+      - >-
+        [[ -n "$$KC_BOOTSTRAP_ADMIN_PASSWORD" && -n "$$SSO_USER_PASSWORD" ]] ||
+        { echo "Set KEYCLOAK_ADMIN_PASSWORD and SSO_USER_PASSWORD in .env" >&2; exit 1; };
+        exec /opt/keycloak/bin/kc.sh "$$@"
+      - kc.sh
     command: ["start-dev", "--import-realm", "--http-port=8080", "--health-enabled=true"]
     # The browser and market_api (host network) both reach Keycloak at
     # KEYCLOAK_URL, so the issuer they see is the same.
@@ -38,8 +51,8 @@ services:
     environment:
       KC_HOSTNAME: ${KEYCLOAK_URL:-http://127.0.0.1:${KEYCLOAK_PORT:-8081}}
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
-      SSO_USER_PASSWORD: ${SSO_USER_PASSWORD:?Set SSO_USER_PASSWORD in .env}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-}
+      SSO_USER_PASSWORD: ${SSO_USER_PASSWORD:-}
       KC_AEZA_PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:${FRONTEND_PORT:-8080}}
     volumes:
       # /opt/keycloak/data belongs to the keycloak user in the image, so the
@@ -76,9 +89,9 @@ services:
     restart: unless-stopped
     entrypoint: ["market_api"]
     command: ["--listen", "0.0.0.0:3000"]
-    # Login settings; see .env.example. By default the API signs in through the
-    # bundled Keycloak. It refuses to start without OIDC or the local admin
-    # unless AUTH_DISABLED=true.
+    # Login settings; see .env.example. DEFAULT_AUTH=true signs in with passwords
+    # from public.admins; otherwise through OIDC, by default the bundled
+    # Keycloak (COMPOSE_PROFILES=sso).
     environment:
       DATABASE_URL: *database-url
       OIDC_ISSUER: ${OIDC_ISSUER:-${KEYCLOAK_URL:-http://127.0.0.1:${KEYCLOAK_PORT:-8081}}/realms/aeza}
@@ -88,11 +101,15 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:${FRONTEND_PORT:-8080}}
       SESSION_HOURS: ${SESSION_HOURS:-12}
       AUTH_DISABLED: ${AUTH_DISABLED:-false}
+      DEFAULT_AUTH: ${DEFAULT_AUTH:-false}
+      ENABLE_DEFAULT_USER: ${ENABLE_DEFAULT_USER:-false}
       LOCAL_ADMIN_USER: ${LOCAL_ADMIN_USER:-}
       LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-}
     depends_on:
       keycloak:
         condition: service_healthy
+        # Absent without the sso profile, e.g. with DEFAULT_AUTH=true.
+        required: false
       migrate:
         condition: service_completed_successfully
 

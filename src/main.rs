@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use aeza_intelligence::analysis::{self, Params, Report};
-use aeza_intelligence::{Dataset, PgAdapter};
+use aeza_intelligence::{Dataset, PgAdapter, passwords};
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
@@ -56,6 +56,9 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Set the DEFAULT_AUTH password of an existing public.admins row. The
+    /// password is read from the first line of stdin.
+    SetPassword { email: String },
 }
 
 #[tokio::main]
@@ -69,6 +72,26 @@ async fn main() -> anyhow::Result<()> {
         Command::Migrate => {
             adapter.migrate().await?;
             println!("Migrations applied");
+        }
+        Command::SetPassword { email } => {
+            let mut password = String::new();
+            std::io::stdin().read_line(&mut password)?;
+            let password = password.trim_end_matches(['\r', '\n']);
+            anyhow::ensure!(
+                password.chars().count() >= passwords::MIN_LENGTH,
+                "the password must be at least {} characters",
+                passwords::MIN_LENGTH
+            );
+            let updated = sqlx::query(
+                "UPDATE public.admins SET password_hash = $2 WHERE lower(email) = lower($1)",
+            )
+            .bind(&email)
+            .bind(passwords::hash(password))
+            .execute(adapter.pool())
+            .await?
+            .rows_affected();
+            anyhow::ensure!(updated == 1, "{email} is not in public.admins");
+            println!("{email}: password set");
         }
         Command::Rollback { to } => {
             adapter.rollback(to).await?;

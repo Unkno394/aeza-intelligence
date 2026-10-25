@@ -10,7 +10,7 @@ payment behavior. No training data is required before the first observation.
 ```sh
 cp .env.example .env
 # Set DATABASE_URL in .env to the existing PostgreSQL on this host,
-# and the OIDC_* variables (see Authentication below).
+# and choose the login: DEFAULT_AUTH=true or OIDC (see Authentication below).
 docker compose up -d --build
 ```
 
@@ -26,54 +26,57 @@ the application containers; the existing database remains in place.
 ### Authentication
 
 The web UI and every `/api` route, including the `/api/client/ws` WebSocket and
-the Market Simulator behind the frontend proxy, require a session. For local
-sign-in, set `LOCAL_ADMIN_USER` and a unique `LOCAL_ADMIN_PASSWORD` of at least
-16 characters in `.env`. The local account has the `superadmin` role. Its
-sessions are stored in API memory and expire after `SESSION_HOURS`; a restart
-signs everyone out. The login page also supports OpenID Connect (Authorization
-Code + PKCE) with any provider that publishes
-`/.well-known/openid-configuration`:
+the Market Simulator behind the frontend proxy, require a session. Access is
+granted to active rows of `public.admins`: `viewer` reads everything;
+`operator` and `superadmin` may also change the Risk Score settings. There are
+two ways to sign in, chosen in `.env`:
 
-The Compose stack includes a local Keycloak provider at
-`http://127.0.0.1:8081` (`KEYCLOAK_PORT`; `KEYCLOAK_URL` when it is opened at
-another address), and by default the API signs in through it. Its realm
-`aeza`, the public PKCE client `aeza-intelligence` and the
-`analyst@aeza.local` account are imported from `keycloak/aeza-realm.json` on
-first start. Set `KEYCLOAK_ADMIN_PASSWORD` and `SSO_USER_PASSWORD` in `.env`;
-the SSO button then signs in as `analyst` using `SSO_USER_PASSWORD`. Both are
-read only when the `keycloak` volume is created. To use another provider
-instead:
+- **Password login**, `DEFAULT_AUTH=true`. The login form checks the email and
+  password of a `public.admins` row (Argon2id hash in `password_hash`); no
+  OIDC provider or Keycloak is involved. With `ENABLE_DEFAULT_USER=true` the
+  API creates a `superadmin` from `LOCAL_ADMIN_USER` and `LOCAL_ADMIN_PASSWORD`
+  (16+ characters) at startup while no admin has a password yet, so the first
+  sign-in works on an empty database; later changes to that admin are kept.
+  Further admins: `scripts/auth_user.sh add` (below).
+- **OIDC** (Authorization Code + PKCE), `DEFAULT_AUTH=false`, the default. The
+  provider only proves the email (`email_verified` must not be false). The
+  Compose stack includes a Keycloak at `http://127.0.0.1:8081`, started with
+  `COMPOSE_PROFILES=sso` (`KEYCLOAK_PORT`; `KEYCLOAK_URL` when it is opened at
+  another address); without `OIDC_ISSUER` the API uses it. Its realm `aeza`,
+  the public PKCE client `aeza-intelligence` and the `analyst@aeza.local`
+  account are imported from `keycloak/aeza-realm.json` on first start. Set
+  `KEYCLOAK_ADMIN_PASSWORD` and `SSO_USER_PASSWORD` in `.env`; the SSO button
+  then signs in as `analyst` using `SSO_USER_PASSWORD`. Both are read only when
+  the `keycloak` volume is created. To use another provider instead:
 
-1. Register a client at the provider with redirect URI
-   `<PUBLIC_URL>/api/auth/callback` and post-logout redirect URI `<PUBLIC_URL>/`.
-2. Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (empty for a public
-   client) and, if users do not open `http://127.0.0.1:8080`, `PUBLIC_URL` in
-   `.env`. Open the UI only at `PUBLIC_URL`: cookies and the WebSocket origin
-   check are bound to it.
-3. Add the users to `public.admins`. The provider only proves the email
-   (`email_verified` must not be false); access is granted to an active row with
-   that email, case-insensitively:
+  1. Register a client at the provider with redirect URI
+     `<PUBLIC_URL>/api/auth/callback` and post-logout redirect URI `<PUBLIC_URL>/`.
+  2. Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (empty for a
+     public client) in `.env`.
+  3. Add the users to `public.admins`; the email is compared case-insensitively:
 
-   ```sql
-   INSERT INTO public.admins (email, name, role)
-   VALUES ('analyst@example.com', 'Analyst', 'viewer');
-   ```
+     ```sql
+     INSERT INTO public.admins (email, name, role)
+     VALUES ('analyst@example.com', 'Analyst', 'viewer');
+     ```
 
-   `viewer` reads everything; `operator` and `superadmin` may also change the
-   Risk Score settings. Setting `"isActive"` to false ends that admin's
-   sessions on their next request, and open WebSockets within 30 seconds.
-
-Sessions last `SESSION_HOURS` (12 by default) in an HttpOnly, SameSite=Lax
-cookie (`Secure` when `PUBLIC_URL` is https); `public.admin_sessions` stores
-only SHA-256 hashes of OIDC tokens. `market_api` refuses to start without either
-the local credentials or OIDC settings. For local development without a
-login, start it with `AUTH_DISABLED=true`: every request then acts as a
-superadmin, so never use it on a reachable host.
+If users do not open `http://127.0.0.1:8080`, set `PUBLIC_URL`, and open the
+UI only there: cookies and the Origin check are bound to it. Sessions last
+`SESSION_HOURS` (12 by default) in an HttpOnly, SameSite=Lax cookie (`Secure`
+when `PUBLIC_URL` is https). `public.admin_sessions` stores only SHA-256 hashes
+of the cookie tokens, so sessions survive an API restart, and logout or setting
+`"isActive"` to false ends them on the next request and closes open WebSockets
+within 30 seconds. For local development without a login, start the API with
+`AUTH_DISABLED=true`: every request then acts as a superadmin, so never use it
+on a reachable host.
 
 #### Accounts and the login check
 
-Keycloak keeps its accounts in the `keycloak` volume. `scripts/auth_user.sh`
-creates the Keycloak account and the `public.admins` row together:
+`scripts/auth_user.sh` creates the `public.admins` row and the password
+together. With `DEFAULT_AUTH=true` the password is hashed into that row
+through the API image (`aeza_intelligence set-password`, so build the images
+first); otherwise it goes to the Keycloak account, kept in the `keycloak`
+volume:
 
 ```sh
 bash scripts/auth_user.sh add me@example.com operator "Имя Фамилия"   # asks for a password
@@ -83,7 +86,7 @@ bash scripts/auth_user.sh disable me@example.com       # enable to restore
 bash scripts/auth_user.sh list
 ```
 
-The Keycloak admin console is at http://127.0.0.1:8081/admin
+With OIDC, the Keycloak admin console is at http://127.0.0.1:8081/admin
 (`KEYCLOAK_ADMIN`, `admin` by default, and `KEYCLOAK_ADMIN_PASSWORD`).
 An account created there also needs a `public.admins` row (`auth_user.sh role`
 does not create one; use `add`, or the SQL above).
@@ -242,7 +245,8 @@ push and pull request (`.github/workflows/ci.yml`).
   PKCE. Covered: 401 without a session, the callback, cookie flags, `returnTo`,
   the `forbidden`, `unverified`, `expired`, `denied` and `failed` errors, two
   logins in one browser, the Origin check, roles over the WebSocket, logout,
-  deactivation and expiry, the local admin, the client and market routes on
+  deactivation and expiry, password login (`DEFAULT_AUTH`) with sessions
+  that survive a restart, `ENABLE_DEFAULT_USER`, the client and market routes on
   `scripts/fixtures/data.json`, and that services link only to Aéza tariffs.
 - `tests/model_fixture.rs` runs both models over the 60 generated days of
   `scripts/fixtures/model_history.json`: Historical becomes confident, keeps

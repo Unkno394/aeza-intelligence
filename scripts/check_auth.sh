@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end login through the real Keycloak of docker-compose.yml and the
+# End-to-end OIDC login through the real Keycloak of docker-compose.yml and the
 # frontend proxy. The API's own login rules (roles, Origin checks, sessions,
 # deactivation) are covered by `cargo test`; this checks what those tests
 # cannot: the realm in keycloak/, the Keycloak form and the proxy in front of
@@ -38,7 +38,9 @@ export PUBLIC_URL="http://127.0.0.1:${FRONTEND_PORT:-8080}"
 export KEYCLOAK_PORT="${KEYCLOAK_PORT:-8081}"
 # The API runs against the bundled Keycloak for the check, whatever .env says.
 export KEYCLOAK_URL="http://127.0.0.1:$KEYCLOAK_PORT"
-export OIDC_ISSUER="$KEYCLOAK_URL/realms/aeza" OIDC_CLIENT_ID=aeza-intelligence OIDC_CLIENT_SECRET= AUTH_DISABLED=false
+export OIDC_ISSUER="$KEYCLOAK_URL/realms/aeza" OIDC_CLIENT_ID=aeza-intelligence OIDC_CLIENT_SECRET= \
+  AUTH_DISABLED=false DEFAULT_AUTH=false ENABLE_DEFAULT_USER=false
+export COMPOSE_PROFILES="sso${COMPOSE_PROFILES:+,$COMPOSE_PROFILES}"
 email=auth-e2e@aeza.test
 password='auth-e2e-Passw0rd'
 

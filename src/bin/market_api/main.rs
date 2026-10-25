@@ -480,7 +480,7 @@ async fn main() -> Result<()> {
         .connect(&cli.database_url)
         .await?;
     PgAdapter::from_pool(pool.clone()).migrate().await?;
-    let auth = Auth::new(cli.auth).await?;
+    let auth = Auth::new(cli.auth, &pool).await?;
     let (live, _watcher) = Live::start(pool.clone()).await?;
     let app = router(AppState { pool, live, auth });
     let listener = tokio::net::TcpListener::bind(cli.listen).await?;
@@ -532,7 +532,7 @@ fn router(state: AppState) -> Router {
             state.clone(),
             auth::require_admin,
         ))
-        .route("/api/auth/login", get(auth::login).post(auth::local_login))
+        .route("/api/auth/login", get(auth::login).post(auth::password_login))
         .route("/api/auth/methods", get(auth::methods))
         .route("/api/auth/callback", get(auth::callback))
         .route("/api/auth/logout", post(auth::logout))

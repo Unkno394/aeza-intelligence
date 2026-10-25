@@ -15,6 +15,7 @@ use std::{
 
 use aeza_intelligence::{
     Dataset,
+    passwords,
     market::Offer,
     market_store::{ObservationSource, save_offers},
 };
@@ -39,7 +40,7 @@ use tokio_tungstenite::{
 use super::*;
 
 const CLIENT_ID: &str = "aeza-intelligence";
-const LOCAL_PASSWORD: &str = "local-admin-test-password";
+const PASSWORD: &str = "admin-test-password";
 const FOREIGN: &str = "http://evil.example";
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -53,7 +54,8 @@ struct Args {
 
 enum Mode {
     Oidc,
-    Local,
+    /// DEFAULT_AUTH: passwords from public.admins.
+    Password,
     Disabled,
 }
 
@@ -144,6 +146,11 @@ type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 impl Api {
     async fn start(pool: PgPool, mode: Mode) -> Self {
+        Self::start_with(pool, mode, &[]).await
+    }
+
+    /// `extra` flags are appended to the ones of `mode`.
+    async fn start_with(pool: PgPool, mode: Mode, extra: &[&str]) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let provider = match mode {
@@ -159,23 +166,17 @@ impl Api {
                 "--public-url".into(),
                 base.clone(),
             ],
-            Mode::Local => vec![
-                "--local-admin-user".into(),
-                "admin".into(),
-                "--local-admin-password".into(),
-                LOCAL_PASSWORD.into(),
-                "--public-url".into(),
-                base.clone(),
-            ],
+            Mode::Password => vec!["--default-auth".into(), "--public-url".into(), base.clone()],
             Mode::Disabled => vec!["--auth-disabled".into()],
         };
+        let flags = flags.into_iter().chain(extra.iter().map(|flag| flag.to_string()));
         // sqlx::test loads .env; the variables there must not change the test setup.
         let matches = Args::command()
             .mut_args(|arg| arg.env(None::<&'static str>))
             .try_get_matches_from(std::iter::once("market_api".to_owned()).chain(flags))
             .unwrap();
         let args = Args::from_arg_matches(&matches).unwrap();
-        let auth = Auth::new(args.auth).await.unwrap();
+        let auth = Auth::new(args.auth, &pool).await.unwrap();
         let (live, watcher) = Live::start(pool.clone()).await.unwrap();
         let app = router(AppState {
             pool: pool.clone(),
@@ -333,6 +334,21 @@ impl Api {
         .execute(&self.pool)
         .await
         .unwrap();
+    }
+
+    async fn add_admin_with_password(&self, email: &str, role: &str, password: &str) {
+        sqlx::query("INSERT INTO public.admins (email, name, role, password_hash) VALUES ($1, $1, $2, $3)")
+            .bind(email)
+            .bind(role)
+            .bind(passwords::hash(password))
+            .execute(&self.pool)
+            .await
+            .unwrap();
+    }
+
+    async fn password_login(&self, browser: &mut Browser, username: &str, password: &str) -> u16 {
+        let body = json!({"username": username, "password": password});
+        self.post("/api/auth/login", browser, Some(body)).await.status
     }
 
     async fn set_active(&self, email: &str, active: bool) {
@@ -749,40 +765,102 @@ async fn deactivation_and_expiry_end_sessions(pool: PgPool) {
     assert_eq!(api.get("/api/auth/me", &mut expired).await.status, 401);
 }
 
-// ------------------------------------------------------------ local login
+// --------------------------------------------------------- password login
 
 #[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
-async fn local_admin_signs_in_with_the_configured_password(pool: PgPool) {
-    let api = Api::start(pool, Mode::Local).await;
+async fn password_login_checks_the_stored_hash(pool: PgPool) {
+    let api = Api::start(pool, Mode::Password).await;
+    api.add_admin_with_password("viewer@aeza.test", "viewer", PASSWORD).await;
+    api.add_admin_with_password("inactive@aeza.test", "viewer", PASSWORD).await;
+    api.set_active("inactive@aeza.test", false).await;
     let mut browser = Browser::default();
     let methods = api.get("/api/auth/methods", &mut browser).await.json();
     assert_eq!(methods, json!({"sso": false, "local": true}));
+    let reply = api.get("/api/auth/login", &mut browser).await;
+    assert_eq!(reply.location, "/", "there is no provider to redirect to");
 
-    for (username, password) in [("admin", "wrong-password-of-enough-length"), ("root", LOCAL_PASSWORD)] {
-        let body = json!({"username": username, "password": password});
-        let reply = api.post("/api/auth/login", &mut browser, Some(body)).await;
-        assert_eq!(reply.status, 401, "{username}");
+    for (username, password) in [
+        ("viewer@aeza.test", "wrong-password-of-enough-length"),
+        ("nobody@aeza.test", PASSWORD),
+        ("inactive@aeza.test", PASSWORD),
+        // Imported for Keycloak by a migration; it has no password.
+        ("analyst@aeza.local", ""),
+    ] {
+        assert_eq!(api.password_login(&mut browser, username, password).await, 401, "{username}");
     }
-    let body = json!({"username": "admin", "password": LOCAL_PASSWORD});
+    let body = json!({"username": "viewer@aeza.test", "password": PASSWORD});
     let reply = api
-        .send(reqwest::Method::POST, "/api/auth/login", &mut browser, Some(FOREIGN), Some(body.clone()))
+        .send(reqwest::Method::POST, "/api/auth/login", &mut browser, Some(FOREIGN), Some(body))
         .await;
     assert_eq!(reply.status, 403, "a login from another site is refused");
     assert!(!browser.signed_in());
 
+    let body = json!({"username": "Viewer@Aeza.Test", "password": PASSWORD});
     let reply = api.post("/api/auth/login", &mut browser, Some(body)).await;
-    assert_eq!(reply.status, 204);
+    assert_eq!(reply.status, 204, "email is matched case-insensitively");
+    let session = reply.cookie("aeza_session").unwrap();
+    assert!(session.contains("HttpOnly") && session.contains("SameSite=Lax"), "{session}");
     let me = api.get("/api/auth/me", &mut browser).await.json();
-    assert_eq!(me["role"], "superadmin");
-    let socket = api.socket(&browser, Some(&api.base)).await;
-    assert!(socket.is_ok(), "the local session also opens the WebSocket");
+    assert_eq!((me["email"].as_str(), me["role"].as_str()), (Some("viewer@aeza.test"), Some("viewer")));
+    let (sessions, last_login): (i64, Option<DateTime<Utc>>) = sqlx::query_as(
+        r#"SELECT (SELECT count(*) FROM public.admin_sessions), "lastLoginAt"
+           FROM public.admins WHERE email = 'viewer@aeza.test'"#,
+    )
+    .fetch_one(&api.pool)
+    .await
+    .unwrap();
+    assert_eq!(sessions, 1);
+    assert!(last_login.is_some());
+    assert!(api.socket(&browser, Some(&api.base)).await.is_ok());
 
     let mut stolen = Browser {
         cookies: browser.cookies.clone(),
     };
     let reply = api.post("/api/auth/logout", &mut browser, None).await;
     assert_eq!(reply.json()["logoutUrl"], Value::Null);
+    assert!(!browser.signed_in());
     assert_eq!(api.get("/api/auth/me", &mut stolen).await.status, 401);
+}
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn password_sessions_survive_a_restart_but_not_deactivation(pool: PgPool) {
+    let api = Api::start(pool.clone(), Mode::Password).await;
+    api.add_admin_with_password("viewer@aeza.test", "viewer", PASSWORD).await;
+    let mut browser = Browser::default();
+    assert_eq!(api.password_login(&mut browser, "viewer@aeza.test", PASSWORD).await, 204);
+    drop(api);
+
+    // A new process on the same database knows the session.
+    let api = Api::start(pool, Mode::Password).await;
+    assert_eq!(api.get("/api/auth/me", &mut browser).await.status, 200);
+    let mut socket = api.socket(&browser, Some(&api.base)).await.unwrap();
+    next_message(&mut socket).await.unwrap();
+    api.set_active("viewer@aeza.test", false).await;
+    assert_eq!(api.get("/api/auth/me", &mut browser).await.status, 401);
+    while next_message(&mut socket).await.is_some() {}
+}
+
+#[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+async fn the_default_user_is_created_only_while_no_admin_has_a_password(pool: PgPool) {
+    let default_user = |password: &'static str| {
+        ["--enable-default-user", "--local-admin-user", "admin", "--local-admin-password", password]
+    };
+    let api = Api::start_with(pool.clone(), Mode::Password, &default_user(PASSWORD)).await;
+    let mut browser = Browser::default();
+    assert_eq!(api.password_login(&mut browser, "admin", PASSWORD).await, 204);
+    assert_eq!(api.get("/api/auth/me", &mut browser).await.json()["role"], "superadmin");
+    drop(api);
+
+    // The admin exists now: another LOCAL_ADMIN_PASSWORD changes nothing.
+    let api = Api::start_with(pool, Mode::Password, &default_user("another-password-of-length")).await;
+    let mut browser = Browser::default();
+    assert_eq!(api.password_login(&mut browser, "admin", "another-password-of-length").await, 401);
+    assert_eq!(api.password_login(&mut browser, "admin", PASSWORD).await, 204);
+    let admins: i64 = sqlx::query_scalar("SELECT count(*) FROM public.admins WHERE email = 'admin'")
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+    assert_eq!(admins, 1);
 }
 
 // ------------------------------------------------------------------- data
