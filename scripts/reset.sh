@@ -2,7 +2,7 @@
 # Deletes the whole local stack and brings it up from scratch: the Compose
 # containers, volumes and images, and the PostgreSQL container with its data.
 # The database is recreated from DATABASE_URL in .env, then Compose applies
-# the migrations and loads scripts/data.json.
+# the migrations and loads scripts/given/data.json.
 #
 #   bash scripts/reset.sh       asks for confirmation
 #   bash scripts/reset.sh -y    without asking

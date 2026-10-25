@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod api_tests;
 mod auth;
 
 use std::{
@@ -39,7 +41,13 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Scores depend on the current time (renewal window), so they are recalculated
 /// at least this often even without data changes.
 const RESCORE_INTERVAL: Duration = Duration::from_secs(60);
-const PING_INTERVAL: Duration = Duration::from_secs(30);
+/// Also how often an open WebSocket rechecks its session; shorter in tests so
+/// a deactivated admin's socket closes without a 30-second wait.
+const PING_INTERVAL: Duration = if cfg!(test) {
+    Duration::from_millis(200)
+} else {
+    Duration::from_secs(30)
+};
 
 #[derive(Parser)]
 struct Cli {
@@ -473,10 +481,17 @@ async fn main() -> Result<()> {
         .await?;
     PgAdapter::from_pool(pool.clone()).migrate().await?;
     let auth = Auth::new(cli.auth).await?;
-    let live = Live::start(pool.clone()).await?;
-    let state = AppState { pool, live, auth };
+    let (live, _watcher) = Live::start(pool.clone()).await?;
+    let app = router(AppState { pool, live, auth });
+    let listener = tokio::net::TcpListener::bind(cli.listen).await?;
+    eprintln!("market API listening on http://{}", cli.listen);
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+fn router(state: AppState) -> Router {
     // Every route added before route_layer requires a session.
-    let app = Router::new()
+    Router::new()
         .route("/api/market/search-interest", get(search_interest))
         .route(
             "/api/market/search-interest/comparison",
@@ -521,11 +536,7 @@ async fn main() -> Result<()> {
         .route("/api/auth/methods", get(auth::methods))
         .route("/api/auth/callback", get(auth::callback))
         .route("/api/auth/logout", post(auth::logout))
-        .with_state(state);
-    let listener = tokio::net::TcpListener::bind(cli.listen).await?;
-    eprintln!("market API listening on http://{}", cli.listen);
-    axum::serve(listener, app).await?;
-    Ok(())
+        .with_state(state)
 }
 
 #[derive(Clone)]
@@ -637,7 +648,8 @@ struct LiveState {
 }
 
 impl Live {
-    async fn start(pool: PgPool) -> Result<Arc<Self>> {
+    /// Loads the current state and starts the task that keeps it fresh.
+    async fn start(pool: PgPool) -> Result<(Arc<Self>, tokio::task::JoinHandle<()>)> {
         let (settings, settings_metadata) = load_settings(&pool).await?;
         let log_id = last_log_id(&pool).await?;
         let dataset = load_dataset(&pool).await?;
@@ -653,8 +665,8 @@ impl Live {
                 log_id,
             }),
         });
-        tokio::spawn(live.clone().watch(pool));
-        Ok(live)
+        let watcher = tokio::spawn(live.clone().watch(pool));
+        Ok((live, watcher))
     }
 
     async fn watch(self: Arc<Self>, pool: PgPool) {
@@ -1730,9 +1742,9 @@ async fn price_benchmark_history(
         r#"WITH monthly AS (
              SELECT DISTINCT ON (
                         price.provider_tariff_id,
-                        date_trunc('month', p.observed_at AT TIME ZONE 'UTC')::date
+                        date_trunc('month', price.observed_at AT TIME ZONE 'UTC')::date
                     )
-                    date_trunc('month', p.observed_at AT TIME ZONE 'UTC')::date AS month_start,
+                    date_trunc('month', price.observed_at AT TIME ZONE 'UTC')::date AS month_start,
                     provider.code AS provider_code, tariff.plan_key, tariff.plan_name,
                     tariff.cpu_cores::float8 AS cpu_cores,
                     tariff.ram_mib::float8 / 1024.0 AS ram_gib,

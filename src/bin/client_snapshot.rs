@@ -573,4 +573,80 @@ mod tests {
             "balance_credit_unclassified"
         );
     }
+
+    async fn fixture(pool: sqlx::PgPool) -> PgAdapter {
+        let adapter = PgAdapter::from_pool(pool);
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/fixtures/data.json");
+        adapter
+            .load(&aeza_intelligence::Dataset::from_path(path).unwrap())
+            .await
+            .unwrap();
+        adapter
+    }
+
+    fn at(instant: &str) -> DateTime<Utc> {
+        instant.parse().unwrap()
+    }
+
+    /// (observed_on, observation_count) of every snapshot, by account.
+    async fn snapshots(adapter: &PgAdapter) -> BTreeMap<i64, Vec<(String, i64)>> {
+        let rows: Vec<(i64, String, i64)> = sqlx::query_as(
+            "SELECT account_id, observed_on::text, (model_state->>'observation_count')::bigint \
+             FROM public.client_snapshots ORDER BY account_id, observed_on",
+        )
+        .fetch_all(adapter.pool())
+        .await
+        .unwrap();
+        let mut by_account: BTreeMap<i64, Vec<(String, i64)>> = BTreeMap::new();
+        for (account, day, count) in rows {
+            by_account.entry(account).or_default().push((day, count));
+        }
+        by_account
+    }
+
+    #[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+    async fn one_snapshot_per_account_and_utc_day(pool: sqlx::PgPool) {
+        let adapter = fixture(pool).await;
+        assert_eq!(collect_at(&adapter, at("2026-10-20T12:00:00Z"), None).await.unwrap(), 10);
+        // A restart later the same UTC day keeps the existing snapshots.
+        assert_eq!(collect_at(&adapter, at("2026-10-20T23:59:00Z"), None).await.unwrap(), 0);
+        assert_eq!(collect_at(&adapter, at("2026-10-21T00:01:00Z"), None).await.unwrap(), 10);
+        assert_eq!(collect_at(&adapter, at("2026-10-21T08:00:00Z"), None).await.unwrap(), 0);
+
+        let by_account = snapshots(&adapter).await;
+        assert_eq!(by_account.len(), 10);
+        for (account, days) in by_account {
+            let dates: Vec<&str> = days.iter().map(|(day, _)| day.as_str()).collect();
+            assert_eq!(dates, ["2026-10-20", "2026-10-21"], "account {account}");
+            assert_eq!(days[1].1, days[0].1 + 1, "account {account}: the model advances once per day");
+        }
+    }
+
+    #[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+    async fn new_settings_replace_the_snapshot_of_the_day(pool: sqlx::PgPool) {
+        let adapter = fixture(pool).await;
+        collect_at(&adapter, at("2026-10-20T12:00:00Z"), None).await.unwrap();
+        sqlx::query(
+            "INSERT INTO public.client_settings (settings, version) VALUES ('{}', 2) \
+             ON CONFLICT (id) DO UPDATE SET version = 2",
+        )
+        .execute(adapter.pool())
+        .await
+        .unwrap();
+        assert_eq!(collect_at(&adapter, at("2026-10-20T13:00:00Z"), None).await.unwrap(), 10);
+        let versions: Vec<i64> =
+            sqlx::query_scalar("SELECT DISTINCT settings_version FROM public.client_snapshots")
+                .fetch_all(adapter.pool())
+                .await
+                .unwrap();
+        assert_eq!(versions, [2]);
+        assert!(snapshots(&adapter).await.values().all(|days| days.len() == 1));
+    }
+
+    #[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
+    async fn one_account_can_be_collected_alone(pool: sqlx::PgPool) {
+        let adapter = fixture(pool).await;
+        assert_eq!(collect_at(&adapter, at("2026-10-20T12:00:00Z"), Some(3)).await.unwrap(), 1);
+        assert_eq!(snapshots(&adapter).await.keys().copied().collect::<Vec<_>>(), [3]);
+    }
 }

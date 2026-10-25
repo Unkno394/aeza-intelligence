@@ -716,4 +716,51 @@ mod tests {
         assert!(admin("operator").can_edit_settings());
         assert!(admin("superadmin").can_edit_settings());
     }
+
+    /// Auth from command-line flags only, ignoring the environment.
+    async fn auth(flags: &[&str]) -> Result<Arc<Auth>> {
+        use clap::{CommandFactory, FromArgMatches};
+        #[derive(clap::Parser)]
+        struct Args {
+            #[command(flatten)]
+            auth: AuthArgs,
+        }
+        let matches = Args::command()
+            .mut_args(|arg| arg.env(None::<&'static str>))
+            .try_get_matches_from(std::iter::once("market_api").chain(flags.iter().copied()))?;
+        Auth::new(Args::from_arg_matches(&matches)?.auth).await
+    }
+
+    #[tokio::test]
+    async fn refuses_to_start_without_a_complete_login_method() {
+        let error = |result: Result<Arc<Auth>>| result.err().map(|error| error.to_string());
+        assert_eq!(
+            error(auth(&[]).await).as_deref(),
+            Some("OIDC_ISSUER or LOCAL_ADMIN_USER/LOCAL_ADMIN_PASSWORD is required")
+        );
+        // Compose passes unset variables as empty strings.
+        let empty = ["--local-admin-user=", "--local-admin-password="];
+        assert!(error(auth(&empty).await).is_some_and(|e| e.starts_with("OIDC_ISSUER or")));
+        assert_eq!(
+            error(auth(&["--local-admin-user", "admin"]).await).as_deref(),
+            Some("LOCAL_ADMIN_USER and LOCAL_ADMIN_PASSWORD must be set together")
+        );
+        let short = ["--local-admin-user", "admin", "--local-admin-password", "short"];
+        assert_eq!(
+            error(auth(&short).await).as_deref(),
+            Some("LOCAL_ADMIN_PASSWORD must be at least 16 characters")
+        );
+        assert!(auth(&["--auth-disabled"]).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn cookies_are_secure_behind_https() {
+        let local = |url| {
+            ["--local-admin-user", "admin", "--local-admin-password", "long-enough-password", "--public-url", url]
+        };
+        let cookie = auth(&local("https://intel.example")).await.unwrap().set_cookie("a", "1", "/", 60);
+        assert_eq!(cookie, "a=1; Path=/; Max-Age=60; HttpOnly; SameSite=Lax; Secure");
+        let cookie = auth(&local("http://127.0.0.1:8080")).await.unwrap().set_cookie("a", "1", "/", 60);
+        assert_eq!(cookie, "a=1; Path=/; Max-Age=60; HttpOnly; SameSite=Lax");
+    }
 }

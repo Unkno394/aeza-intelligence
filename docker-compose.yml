@@ -67,7 +67,7 @@ services:
 
   seed:
     <<: *app
-    command: ["load", "--skip-if-loaded", "/data/data.json"]
+    command: ["load", "--skip-if-loaded", "/data/given/data.json"]
     volumes:
       - ./scripts:/data:ro
 

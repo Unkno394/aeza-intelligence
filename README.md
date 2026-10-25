@@ -15,7 +15,7 @@ docker compose up -d --build
 ```
 
 Open http://127.0.0.1:8080. Compose uses the existing PostgreSQL, applies migrations, loads
-`scripts/data.json` when the client tables are empty, and runs the API, daily
+`scripts/given/data.json` when the client tables are empty, and runs the API, daily
 client snapshots, the competitor tariff and EUR→RUB collector (daily), the
 Market Simulator and the frontend HTTP server. Search interest is collected
 only when `TRENDSMCP_API_KEY` is set in `.env`; the Market Intelligence map
@@ -66,9 +66,9 @@ instead:
 Sessions last `SESSION_HOURS` (12 by default) in an HttpOnly, SameSite=Lax
 cookie (`Secure` when `PUBLIC_URL` is https); `public.admin_sessions` stores
 only SHA-256 hashes of OIDC tokens. `market_api` refuses to start without either
-the local credentials or OIDC settings. For local development and the `scripts/check_*` scripts, which
-call the API directly, start it with `AUTH_DISABLED=true`: every request then
-acts as a superadmin, so never use it on a reachable host.
+the local credentials or OIDC settings. For local development without a
+login, start it with `AUTH_DISABLED=true`: every request then acts as a
+superadmin, so never use it on a reachable host.
 
 #### Accounts and the login check
 
@@ -88,22 +88,14 @@ The Keycloak admin console is at http://127.0.0.1:8081/admin
 An account created there also needs a `public.admins` row (`auth_user.sh role`
 does not create one; use `add`, or the SQL above).
 
-`bash scripts/check_auth.sh` starts Keycloak, the API and the frontend, creates
-test accounts `auth-*@aeza.test` and goes through the real Authorization Code +
-PKCE flow and the Keycloak login form via the frontend proxy. It checks 401
-without a session (HTTP, WebSocket, Market Simulator proxy), a wrong password,
-`returnTo`, cookie flags, the `forbidden`, `unverified`, `expired` and `denied`
-errors, the Origin check for the WebSocket and logout, that a viewer cannot
-change Risk Score settings and an operator can, that logout ends the session,
-and that deactivation ends it on the next request and closes an open WebSocket
-within 30 seconds. `--no-up` checks an already running stack, `--build`
-rebuilds the images first, `--cleanup` deactivates the test accounts.
-
-The check restarts the API with the bundled Keycloak and authentication on,
-whatever `OIDC_*` and `AUTH_DISABLED` say in `.env`; `scripts/check_api.sh` and
-the other scripts that call `127.0.0.1:3000` then get 401, and
-`docker compose up -d api` restarts the API with the settings from `.env`
-again.
+`bash scripts/check_auth.sh` signs in end to end through the real Keycloak
+form and the frontend proxy: the realm in `keycloak/`, the callback, the
+Market Simulator proxy and the Keycloak logout URL. It restarts the API with
+the bundled Keycloak and authentication on, whatever `OIDC_*` and
+`AUTH_DISABLED` say in `.env`; `docker compose up -d api` restarts it with the
+settings from `.env` again. `--no-up` checks an already running stack,
+`--build` rebuilds the images first, `--cleanup` deactivates the test account.
+The login rules themselves are covered by `cargo test` (see [Tests](#tests)).
 
 ## Inputs
 
@@ -230,39 +222,44 @@ days are historical model test inputs; live Risk Score still uses the current
 accounts, services and transactions. The generator intentionally has no access
 to positive customer IDs.
 
-### Check both client models with generated data
+### Tests
 
-`scripts/check_models.sh` uses the Python generator to create 10 fake clients
-and 60 dated feature snapshots in a temporary directory. It runs both Rust
-models without a database and checks that Snapshot analysis returns all clients,
-Historical becomes confident after enough history, and the final behavior
-change for the first fixture account is detected.
+```sh
+export DATABASE_URL=postgres://user:password@127.0.0.1:5433/db   # any server where the user may create databases
+cargo test                                  # API, models, migrations, snapshot scheduler
+(cd market-simulator && cargo test)
+(cd frontend && npm test && npm run build)
+```
 
-Run `bash scripts/check_models.sh` for the offline check. The optional
-`bash scripts/check_models.sh --persist` adds 10 fixture clients with negative
-IDs to the existing PostgreSQL database, writes 60 historical snapshots for
-each, checks stored rows and the Rust analysis, Risk Score and Historical HTTP
-routes, runs the daily collector twice to check for duplicates, simulates two
-UTC days for one fixture account with `--as-of`, then opens
-Dashboard, Snapshot and Historical in headless Chromium and compares their
-Risk Score with the Rust API.
-Existing positive client IDs and identity sequences remain unchanged. The
-script refuses to reuse a negative ID owned by a non-fixture record. Dashboard and
-Snapshot receive the five-feature Risk Score over the `/api/client/ws`
-WebSocket (see [Live channel](#live-channel)); Snapshot reads the
-cross-client robust analysis from `GET /api/client/analysis`. Historical reads
-persisted daily state and compares recent sequences through
-`GET /api/client/historical/{id}/sequence-peers`. Automatically discovered
-cross-customer patterns are served by `GET /api/client/historical/patterns`.
+Tests that touch PostgreSQL use `#[sqlx::test]`: each gets a new temporary
+database with every migration applied and drops it afterwards, so the data in
+`DATABASE_URL` is not touched. GitHub Actions runs the same commands on every
+push and pull request (`.github/workflows/ci.yml`).
+
+- `src/bin/market_api/api_tests.rs` starts the real API on a random port. OIDC
+  logins go through an in-process provider that signs id_tokens with
+  `tests/fixtures/oidc-test-key.pem` (a key used only by the tests) and checks
+  PKCE. Covered: 401 without a session, the callback, cookie flags, `returnTo`,
+  the `forbidden`, `unverified`, `expired`, `denied` and `failed` errors, two
+  logins in one browser, the Origin check, roles over the WebSocket, logout,
+  deactivation and expiry, the local admin, the client and market routes on
+  `scripts/fixtures/data.json`, and that services link only to Aéza tariffs.
+- `tests/model_fixture.rs` runs both models over the 60 generated days of
+  `scripts/fixtures/model_history.json`: Historical becomes confident, keeps
+  its state through JSON and flags the generated change of the first account.
+- `tests/migrations.rs`: versions are unique and without gaps, migrate is
+  idempotent and creates every table, every migration after 104 rolls back and
+  reapplies, and the fixture loads once into empty tables.
+- `src/bin/client_snapshot.rs`: one snapshot per account and UTC day across
+  restarts and midnight, and a settings change replaces the day's snapshot.
 
 ### One PostgreSQL database
 
 Set `DATABASE_URL` in `.env` to the existing `aeza_intelligence` database and
-run `bash scripts/migrate_database.sh`. This applies the market migrations
+run `cargo run --bin aeza_intelligence -- migrate`. This applies the market migrations
 (`001`–`004`) and the customer adapter migrations (`100`–`116`) to that same
 database. Customer tables live in `public`; market tables live in
-`market_intelligence`. The script verifies that all required tables exist and
-prints row counts. It does not create or replace a database. Docker Compose
+`market_intelligence`. It does not create or replace a database. Docker Compose
 uses the same `DATABASE_URL`; see [Quick start](#quick-start).
 
 The client schema compatibility step recognises the former `scripts/001_schema.sql`
@@ -279,7 +276,7 @@ Outside Docker, start the API with `cargo run --bin market_api`. It listens on
 `/api/client/historical/patterns`,
 and the three `/api/market/*` routes.
 For a one-time snapshot run, use `cargo run --bin client_snapshot` after
-loading `.env`. Run `bash scripts/check_api.sh` to print response counts.
+loading `.env`.
 Client data is read-only in the frontend; Risk Score settings are stored in
 `public.client_settings`, versioned in `public.client_settings_history`, and
 shared by every session. Historical snapshots record the configuration version
@@ -423,15 +420,14 @@ local cluster on the host if it is not already running:
 ```sh
 pg_ctl -D .local/postgres -o '-k /tmp -p 55432 -h 127.0.0.1' -l .local/postgres.log start
 set -a; . ./.env; set +a
-bash scripts/migrate_database.sh
+cargo run --bin aeza_intelligence -- migrate
 bash scripts/collect_market.sh
 bash scripts/collect_trends.sh
 cargo run --bin client_snapshot
 cargo run --bin market_api
 ```
 
-In another terminal, run `bash scripts/check_api.sh` to verify response counts,
-including the search series per brand. Then start the frontend with
+In another terminal, start the frontend with
 `cd frontend && npm run dev`. On Arch Linux, `docker compose up -d --build api
 snapshots` runs the API and daily snapshot scheduler against the same database;
 `docker compose --profile collectors up -d trends` additionally schedules

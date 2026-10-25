@@ -30,7 +30,7 @@ if ! pg_isready -q -d "$DATABASE_URL"; then
   fi
 fi
 
-bash scripts/migrate_database.sh
+cargo run --locked --bin aeza_intelligence -- migrate
 
 if [[ $# -eq 0 ]]; then
   cargo run --bin search_interest -- once

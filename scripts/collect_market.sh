@@ -28,7 +28,7 @@ fi
 
 echo 'Checking PostgreSQL connection…'
 psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -c 'SELECT current_database();' || exit 1
-bash scripts/migrate_database.sh || exit 1
+cargo run --locked --bin aeza_intelligence -- migrate || exit 1
 
 echo 'Collecting current competitor tariffs…'
 cargo run --bin market_import -- run --mode live --max-archives 0

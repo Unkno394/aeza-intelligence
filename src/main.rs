@@ -27,9 +27,9 @@ enum Command {
         #[arg(long, default_value_t = 104)]
         to: i64,
     },
-    /// Load a data.json produced by scripts/generate.py into empty tables.
+    /// Load a data.json produced by scripts/given/generate.py into empty tables.
     Load {
-        #[arg(default_value = "scripts/data.json")]
+        #[arg(default_value = "scripts/given/data.json")]
         path: PathBuf,
         /// Apply pending migrations before loading.
         #[arg(long)]
