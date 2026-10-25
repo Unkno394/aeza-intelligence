@@ -10,7 +10,7 @@ function normalizeSettings(value:unknown):Settings {
  const weight=(name:string,legacy:string)=>{const raw=old[name]??old[legacy]??defaults.weights[name as keyof Settings['weights']];return typeof raw==='number'&&Number.isFinite(raw)?Math.min(100,Math.max(0,raw)):defaults.weights[name as keyof Settings['weights']];};
  return {
   ...defaults,...saved,
-  weights:{paymentCoverage:weight('paymentCoverage','balance'),noAutoProlong:weight('noAutoProlong','autoRenew'),prolongWait:weight('prolongWait','status'),failedProlong:weight('failedProlong','transactions'),expiringRevenue:weight('expiringRevenue','renewal')},
+  weights:{paymentCoverage:weight('paymentCoverage','balance'),noAutoProlong:weight('noAutoProlong','autoRenew'),prolongWait:weight('prolongWait','status'),failedProlong:weight('failedProlong','transactions'),expiringRevenue:weight('expiringRevenue','renewal'),priceRisk:weight('priceRisk','priceRisk')},
   mediumThreshold:typeof saved.mediumThreshold==='number'?saved.mediumThreshold:defaults.mediumThreshold,
   highThreshold:typeof saved.highThreshold==='number'?saved.highThreshold:defaults.highThreshold,
   renewalWindowDays:typeof saved.renewalWindowDays==='number'?saved.renewalWindowDays:defaults.renewalWindowDays,

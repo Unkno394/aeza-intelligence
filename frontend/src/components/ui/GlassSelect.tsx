@@ -13,10 +13,11 @@ interface GlassSelectProps {
  disabled?:boolean;
  placeholder?:string;
  searchable?:boolean;
+ searchPlaceholder?:string;
 }
 interface Position {left:number;top:number;width:number}
 
-export function GlassSelect({value,options,onChange,className='',disabled=false,placeholder='Выберите…',searchable=false,...ariaProps}:GlassSelectProps){
+export function GlassSelect({value,options,onChange,className='',disabled=false,placeholder='Выберите…',searchable=false,searchPlaceholder='Поиск по имени, почте или ID…',...ariaProps}:GlassSelectProps){
  const rootRef=useRef<HTMLDivElement>(null);
  const triggerRef=useRef<HTMLButtonElement>(null);
  const menuRef=useRef<HTMLDivElement>(null);
@@ -128,7 +129,7 @@ export function GlassSelect({value,options,onChange,className='',disabled=false,
    <span className="glass-select-value">{selected?.label??placeholder}</span><ChevronDown size={15} className="glass-select-chevron" aria-hidden="true"/>
   </button>
   {open&&createPortal(<div ref={menuRef} id={menuId} className={`glass-select-menu${simulatorMenu?' simulator-select-menu':''}`} role={searchable?'dialog':'listbox'} aria-label={ariaProps['aria-label']} style={{left:position.left,top:position.top,width:position.width}}>
-   {searchable&&<label className="glass-select-search"><Search size={14} aria-hidden="true"/><input ref={searchRef} type="search" value={query} onChange={event=>{setQuery(event.target.value);setActiveIndex(0);}} onKeyDown={onSearchKeyDown} placeholder="Поиск по имени, почте или ID…" aria-label="Поиск в списке" aria-controls={`${menuId}-options`} aria-activedescendant={visibleOptions[activeIndex]?`${menuId}-option-${activeIndex}`:undefined} /></label>}
+   {searchable&&<label className="glass-select-search"><Search size={14} aria-hidden="true"/><input ref={searchRef} type="search" value={query} onChange={event=>{setQuery(event.target.value);setActiveIndex(0);}} onKeyDown={onSearchKeyDown} placeholder={searchPlaceholder} aria-label="Поиск в списке" aria-controls={`${menuId}-options`} aria-activedescendant={visibleOptions[activeIndex]?`${menuId}-option-${activeIndex}`:undefined} /></label>}
    {searchable?<div id={`${menuId}-options`} className="glass-select-options" role="listbox" aria-label={ariaProps['aria-label']}>{optionList}</div>:optionList}
   </div>,document.body)}
  </div>;

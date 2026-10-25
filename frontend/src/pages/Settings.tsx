@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { AlertCircle, CheckCircle2, Clock3, Info, LoaderCircle, RefreshCw, RotateCcw, Save, SlidersHorizontal } from 'lucide-react';
+import { AlertCircle, CheckCircle2, LoaderCircle, RotateCcw, Save, SlidersHorizontal } from 'lucide-react';
 import { useAnalyzer } from '../hooks/useAnalyzer';
 import { useAuth } from '../hooks/useAuth';
 import { canEditSettings } from '../services/auth';
@@ -9,6 +9,7 @@ import { Button } from '../components/ui/button';
 import { GlassSelect } from '../components/ui/GlassSelect';
 import type { RiskResult, Settings as Config } from '../types';
 import { previewRiskDistribution } from '../features/risk/settingsPreview';
+import { validSettings } from '../features/risk/settingsValidation';
 import { useCurrency } from '../hooks/useCurrency';
 import { convertCurrency, currencyOptions, formatNativeCurrency, type CurrencyCode } from '../features/market/currency';
 import './settings.css';
@@ -19,6 +20,7 @@ const factorDescriptions: Record<keyof Config['weights'], { name: string; descri
   prolongWait: { name: 'Услуги в prolong_wait', description: 'Доля услуг, ожидающих завершения продления.' },
   failedProlong: { name: 'Неуспешные продления', description: 'Доля подтверждённых неуспешных попыток продления.' },
   expiringRevenue: { name: 'Выручка по скоро истекающим услугам', description: 'Доля месячной выручки от услуг, срок которых скоро закончится.' },
+  priceRisk: { name: 'Ценовой риск', description: 'По умолчанию выключен. В сценарном режиме положительный вес меняет только сценарный Risk Score при достаточной выборке; реальная оценка требует подтверждённых наблюдений и контроля.' },
 };
 
 const riskLabels = [
@@ -26,16 +28,6 @@ const riskLabels = [
   { key: 'medium' as const, label: 'Средний риск', color: '#f2b637' },
   { key: 'high' as const, label: 'Высокий риск', color: '#ec6d70' },
 ];
-
-function validSettings(settings: Config) {
-  const weights = Object.values(settings.weights);
-  return weights.every(value => Number.isInteger(value) && value >= 0 && value <= 100)
-    && weights.reduce((sum, value) => sum + value, 0) > 0
-    && Number.isInteger(settings.mediumThreshold) && settings.mediumThreshold >= 1
-    && Number.isInteger(settings.highThreshold) && settings.highThreshold > settings.mediumThreshold && settings.highThreshold <= 100
-    && Number.isInteger(settings.renewalWindowDays) && settings.renewalWindowDays >= 1 && settings.renewalWindowDays <= 90
-    && Number.isInteger(settings.historicalMinDays) && settings.historicalMinDays >= 7 && settings.historicalMinDays <= 365;
-}
 
 function currentDistribution(risks: Record<string, RiskResult>) {
   const counts = { low: 0, medium: 0, high: 0, limited: 0, insufficient: 0 };
@@ -52,7 +44,7 @@ function savedAt(value: string | null | undefined) {
 export default function Settings() {
   const { settings, settingsMetadata, risks, saveSettings } = useAnalyzer();
   const { admin } = useAuth();
-  const { currency, setCurrency, fx, checkedAt, warning, loading: fxLoading, refresh: refreshFx } = useCurrency();
+  const { currency, setCurrency, fx, checkedAt, warning, loading: fxLoading } = useCurrency();
   const readOnly = !canEditSettings(admin);
   const [draft, setDraft] = useState<Config | null>(null);
   const [busy, setBusy] = useState(false);
@@ -60,7 +52,6 @@ export default function Settings() {
   const [convertAmount, setConvertAmount] = useState('100');
   const [convertFrom, setConvertFrom] = useState<CurrencyCode>('USD');
   const [convertTo, setConvertTo] = useState<CurrencyCode>('RUB');
-  const [refreshingFx, setRefreshingFx] = useState(false);
   const serverSettingsRef = useRef('');
 
   useEffect(() => {
@@ -77,12 +68,6 @@ export default function Settings() {
   const current = useMemo(() => risks ? currentDistribution(risks) : null, [risks]);
   const parsedAmount = convertAmount.trim() ? Number(convertAmount) : Number.NaN;
   const convertedAmount = convertCurrency(parsedAmount, convertFrom, convertTo, fx);
-
-  async function updateFx() {
-    setRefreshingFx(true);
-    try { await refreshFx(); }
-    finally { setRefreshingFx(false); }
-  }
 
   if (!settings || !draft) return null;
 
@@ -136,17 +121,13 @@ export default function Settings() {
           {dirty ? <AlertCircle size={15} /> : <CheckCircle2 size={15} />}
           <span>{dirty ? 'Есть несохранённые изменения' : 'Нет несохранённых изменений'}</span>
         </div>
-        <small>Версия {settingsMetadata?.version ?? 0} · сохранено {savedAt(settingsMetadata?.updatedAt)}{settingsMetadata?.updatedBy ? ` · ${settingsMetadata.updatedBy}` : ''}</small>
       </div>
     </div>
-
-    <div className="settings-notice"><Info size={17} /><span>{readOnly
-      ? 'Роль viewer: настройки доступны только для просмотра. Изменять их могут operator и superadmin.'
-      : 'Изменения применяются после сохранения. Risk Score пересчитывается сразу и обновляется во всех открытых сессиях.'}</span></div>
 
     {feedback && <div className={`settings-feedback ${feedback.kind}`} role={feedback.kind === 'error' ? 'alert' : 'status'}>
       {feedback.kind === 'error' ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}{feedback.text}
     </div>}
+    {readOnly && <div className="settings-permission-note" role="status">Текущая роль — viewer: настройки доступны для просмотра. Для изменений нужна роль operator или superadmin. <button type="button" onClick={() => window.location.reload()}>Обновить страницу и права</button></div>}
     {dirty && settingsMetadata && <div className="settings-conflict-note" role="status">Текущий сохранённый вариант — версия {settingsMetadata.version}. Предпросмотр ниже показывает черновик.</div>}
 
     <div className="settings-layout">
@@ -215,10 +196,6 @@ export default function Settings() {
             </div>
             <small>{fx ? `Ставка ЦБ от ${savedAt(fx.date)} · API проверен ${savedAt(checkedAt)} · проверка каждые 15 минут` : 'Нет проверенного курса в API или локальном кеше.'}</small>
           </div>
-          <Button variant="outline" disabled={refreshingFx} onClick={() => void updateFx()}>
-            {refreshingFx ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />}
-            {refreshingFx ? 'Проверка…' : 'Проверить API'}
-          </Button>
         </div>
         <div className="settings-fx-rates">
           <div><span>1 USD</span><strong>{fx ? formatNativeCurrency(1, 'USD', 'RUB', fx) : '—'}</strong></div>
@@ -243,7 +220,6 @@ export default function Settings() {
     {!valid && <div className="settings-validation" role="alert">Проверьте значения: сумма весов должна быть больше нуля, пороги — целыми числами с 0 &lt; средний &lt; высокий ≤ 100; окно продлений — 1–90 дней, минимум истории — 7–365 дней.</div>}
     <div className="settings-footer">
       <Button variant="outline" disabled={readOnly || busy} onClick={restoreDefaults}><RotateCcw size={14} />Восстановить по умолчанию</Button>
-      <span><Clock3 size={13} />Версия конфигурации хранится вместе с автором и временем сохранения.</span>
     </div>
   </div>;
 }

@@ -14,6 +14,7 @@ import {MarketData} from '../features/market/MarketData';
 import {sameScenario, buildMarketScenario, priceChangeMultiplier, initialAezaPlans} from '../features/market/scenario';
 import {MarketSimulatorWizard} from '../features/market/MarketSimulatorWizard';
 import {useCurrency} from '../hooks/useCurrency';
+import {useLocation} from 'react-router-dom';
 
 const api = new MarketApi();
 const sensitivityLabels: Record<Sensitivity, string> = {low: 'Низкая', medium: 'Средняя', high: 'Высокая'};
@@ -24,6 +25,9 @@ const title = (n: string) => strategyLabels[n] ?? n;
 const clone = <T,>(x: T): T => structuredClone(x);
 
 export default function MarketSimulator() {
+  const location=useLocation();
+  const marketParams=new URLSearchParams(location.search);
+  const marketPlan=marketParams.get('from')==='market'?marketParams.get('name'):null;
   const {convertRub,currency} = useCurrency();
   const [template, setTemplate] = useState<Scenario|null>(null);
   const [draft, setDraft] = useState<Scenario|null>(null);
@@ -32,13 +36,14 @@ export default function MarketSimulator() {
   const [source, setSource] = useState<Awaited<ReturnType<MarketApi['sources']>>|null>(null);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [report, setReport] = useState<Report|null>(null);
-  const [preset, setPreset] = useState('akash'), [custom, setCustom] = useState('0');
+  const [preset, setPreset] = useState('flat'), [custom, setCustom] = useState('0');
   const [strategies, setStrategies] = useState<string[]>([]);
   const [marketType, setMarketType] = useState<'economy'|'extended'>('extended');
   const [priceSource, setPriceSource] = useState<'observed'|'manual'>('observed');
   const [sensitivity, setSensitivity] = useState<Sensitivity>('medium'), [focus, setFocus] = useState('baseline');
   const [pageView,setPageView]=useState('simulation');
   const [observedMarketPlanIds,setObservedMarketPlanIds]=useState<string[]>([]);
+  const [marketMatched,setMarketMatched]=useState(false);
   const usd = (amount: number) => convertRub(amount, report?.scenario.valuation_fx ?? draft?.valuation_fx ?? source?.fx);
   const controller = useRef<AbortController|null>(null);
   const generation = useRef(0);
@@ -47,8 +52,15 @@ export default function MarketSimulator() {
     try {
       const [s, c, provenance, own] = await Promise.all([api.example(), api.catalog(), api.sources(),api.aezaPlans()]);
       if (id !== generation.current) return;
-      setTemplate(s); setDraft(clone(s)); setCatalog(c); setSource(provenance); setOfficial(own);
-      setStrategies([...new Set(['baseline', ...s.strategies.map(x => x.name)])]); setPreset('akash'); setReport(null);
+      const requestedName=marketParams.get('name');
+      const cpu=Number(marketParams.get('cpu')),ram=Number(marketParams.get('ram')),disk=Number(marketParams.get('disk'));
+      const requestedRegion=marketParams.get('region');
+      const matching=marketPlan?own.find(plan=>plan.name.toLocaleLowerCase()===requestedName?.toLocaleLowerCase()
+        && plan.vcpu===cpu && Math.abs(plan.ram_gb-ram)<.05 && Math.abs(plan.disk_gb-disk)<.05
+        && (!requestedRegion || plan.regions.includes(requestedRegion))):undefined;
+      setMarketMatched(Boolean(matching));
+      setTemplate(s); setDraft({...clone(s),arrival_weights:Array(s.months).fill(1),...(matching?{aeza_plans:[clone(matching)]}:{})}); setCatalog(c); setSource(provenance); setOfficial(own);
+      setStrategies(matching?['baseline','custom']:[...new Set(['baseline', ...s.strategies.map(x => x.name)])]); setCustom(matching?'10':'0'); setPreset('flat'); setReport(null);
       setMarketType('extended');
       setPriceSource(s.aeza_plans.some(plan => plan.origin === 'observed_list_price' || plan.details) ? 'observed' : 'manual');
     } catch (e) { if (id === generation.current) setError(e instanceof Error ? e.message : 'Не удалось загрузить API'); }
@@ -112,8 +124,9 @@ export default function MarketSimulator() {
     return true;
   }
   return <div className="simulator-page">
-    <div className="page-heading"><div><div className="eyebrow">РЫНОК VPS / VDS</div><h1>Market Simulator<span className="title-dot"/></h1><p>Проверяйте цены и сравнивайте стратегии на одном виртуальном рынке.</p></div><span className="count-tag">HTTP API · {catalog.length} тарифов</span></div>
-    <div className="market-context"><span><i/>Rust API</span><span>{draft.market==='russia'?'Россия':draft.market==='international'?'Международный рынок':'Общий рынок'}</span><span>Расчёт в RUB · показ {currency}</span><span>Seed {draft.seed}</span><button type="button" onClick={()=>setPageView('data')}>Сценарная модель · об источниках ↗</button></div>
+    <div className="page-heading"><div><div className="eyebrow">СЦЕНАРНЫЙ ЭКСПЕРИМЕНТ</div><h1>Сценарии рынка<span className="title-dot"/></h1><p>Проверяйте гипотезы о тарифах при заданных допущениях. Результаты не являются прогнозом спроса или оттока.</p></div></div>
+    {marketPlan && <div className="market-import-note"><strong>Тариф из мониторинга: {marketPlan}</strong><span>{marketMatched?`Тариф выбран в сценарии; цена и предложения конкурентов загружены из проверенного снимка. Наблюдаемая цена: ${marketParams.get('price') ?? '—'} ₽/мес. Своё изменение цены установлено на +10% — его можно изменить ниже.`:'Точного тарифа с такой конфигурацией нет в снимке симулятора. Выберите тариф вручную; наблюдение рынка не подставлено в расчёт.'}</span></div>}
+    <div className="market-context"><span>{draft.market==='russia'?'Россия':draft.market==='international'?'Международный рынок':'Общий рынок'}</span><span>Расчёт в RUB · показ {currency}</span><button type="button" onClick={()=>setPageView('data')}>Сценарная модель · об источниках ↗</button></div>
     <nav className="market-navigation" aria-label="Разделы Market Simulator">{[{id:'simulation',label:'Симуляция',icon:TrendingUp},{id:'behavior',label:'Сегменты спроса',icon:Users},{id:'competition',label:'Конкуренты',icon:Server},{id:'statistics',label:'Статистика',icon:TrendingUp},{id:'data',label:'Данные',icon:Wallet}].map(({id,label,icon:Icon})=><button key={id} type="button" aria-pressed={pageView===id} onClick={()=>setPageView(id)}><Icon size={16}/>{label}</button>)}</nav>
     <div hidden={pageView!=='simulation'}>
     <MarketSimulatorWizard

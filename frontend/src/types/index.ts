@@ -2,7 +2,7 @@ export interface Account { id: string; name: string; email: string; balanceCents
 export interface Service { id: string; accountId: string; name: string; region: string|null; tariffProductId?: string|null; tariffPlanKey?: string|null; priceCents: number; renewalPriceCents?: number; paymentTermSeconds?: number; renewsAt: string; autoRenew: boolean; status: 'active' | 'blocked' | 'prolong_wait' | 'suspended' | 'cancelled' }
 export interface Transaction { id: string; accountId: string; serviceId?: string; tariffProductId?: string|null; billingType?: 'order' | 'prolong'; amountCents: number; type: 'topup' | 'payment'; status: 'completed' | 'failed' | 'unknown'; createdAt: string }
 export interface Dataset { accounts: Account[]; services: Service[]; transactions: Transaction[]; asOf: string; snapshots: {date: string; accountId: string; score: number}[] }
-export interface Settings { weights: { paymentCoverage: number; noAutoProlong: number; prolongWait: number; failedProlong: number; expiringRevenue: number }; mediumThreshold: number; highThreshold: number; renewalWindowDays: number; historicalMinDays: number }
+export interface Settings { weights: { paymentCoverage: number; noAutoProlong: number; prolongWait: number; failedProlong: number; expiringRevenue: number; priceRisk: number }; mediumThreshold: number; highThreshold: number; renewalWindowDays: number; historicalMinDays: number }
 export interface SettingsMetadata { version: number; updatedAt: string|null; updatedBy: string|null }
 export type RiskLevel = 'low' | 'medium' | 'high' | 'limited' | 'insufficient';
 export type AssessmentStatus = 'sufficient_data' | 'limited_data' | 'insufficient_data';

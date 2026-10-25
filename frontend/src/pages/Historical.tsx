@@ -5,6 +5,7 @@ import { ArrowUpRight, CalendarDays, ChevronDown, CircleAlert, Clock3, History, 
 import { useAnalyzer } from '../hooks/useAnalyzer';
 import { Empty, Panel } from '../components/common';
 import { AccountPicker } from '../components/ui/AccountPicker';
+import { historicalChartPoint, historyInPeriod, selectedHistoryPoint, type HistoricalPeriod } from '../features/historicalView';
 import './historical.css';
 
 type MetricDeviation = {
@@ -84,7 +85,6 @@ type HistoryPoint = { observedOn: string; settingsVersion?: number; historicalMi
 type SequencePeer = { accountId: number; similarity: number; sequence: string[] };
 type DiscoveredPattern = { sequence: string[]; support: number; supportRatio: number; clientIds: number[] };
 type TransitionEntry = Transition & { observedOn: string };
-type Period = 7 | 30 | 90;
 
 const metricNames: Record<string, string> = {
   services_count: 'Количество услуг', monthly_spend: 'Расходы в месяц',
@@ -122,9 +122,14 @@ export default function Historical() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [patternError, setPatternError] = useState('');
-  const [period, setPeriod] = useState<Period>(30);
+  const [period, setPeriod] = useState<HistoricalPeriod>(90);
   const [selectedDate, setSelectedDate] = useState('');
-  const account = data?.accounts.find(a => a.id === params.get('client')) ?? data?.accounts[0];
+  const requestedAccount = data?.accounts.find(a => a.id === params.get('client'));
+  const realAccount = data?.accounts.find(a => Number(a.id) > 0 && !a.email.endsWith('@example.test'));
+  const historyDemoAccount = data?.accounts.find(a => a.email.startsWith('demo-stream-'));
+  // The source is a current snapshot and usually has no real event history.
+  // Open the seeded replay by default so the Historical Model is useful on first visit.
+  const account = requestedAccount ?? historyDemoAccount ?? realAccount ?? data?.accounts[0];
 
   useEffect(() => {
     const controller = new AbortController();
@@ -162,17 +167,19 @@ export default function Historical() {
 
   const latest = points.at(-1);
   const chartPoints = useMemo(() => {
-    const latestTime = latest ? Date.parse(latest.observedOn) : 0;
-    return points.filter(point => Date.parse(point.observedOn) >= latestTime - period * 86_400_000)
+    return historyInPeriod(points, period)
       .map(point => {
         const metricScores = Object.values(point.assessment.metric_deviations ?? {}).map(item => item.score).filter((value): value is number => value != null);
         const transitionScores = transitionList(point).map(item => item.elapsed_z_score).filter((value): value is number => value != null);
-        return { date: point.observedOn, anomaly: Math.max(0, ...metricScores, ...transitionScores), riskScore: point.assessment.synthetic_replay ? point.assessment.snapshot_risk_score : undefined };
+        return historicalChartPoint(
+          point.observedOn,
+          metricScores,
+          transitionScores,
+          point.assessment.synthetic_replay ? point.assessment.snapshot_risk_score : undefined,
+        );
       });
-  }, [points, latest, period]);
-  const selectedPoint = chartPoints.length
-    ? points.find(point => point.observedOn === selectedDate && chartPoints.some(row => row.date === point.observedOn)) ?? points.find(point => point.observedOn === chartPoints.at(-1)?.date)
-    : undefined;
+  }, [points, period]);
+  const selectedPoint = selectedHistoryPoint(points, chartPoints.map(row => row.date), selectedDate);
   const selectedChartScore = chartPoints.find(row => row.date === selectedPoint?.observedOn)?.anomaly ?? null;
   const assessment = latest?.assessment;
   const selectedAssessment = selectedPoint?.assessment;
@@ -254,14 +261,14 @@ export default function Historical() {
       <article className="historical-summary-card"><small>Длительность истории</small><strong>{historyDays} дн.</strong><span>{points.length > 1 ? calendarDate(points[0].observedOn) + ' — ' + calendarDate(points.at(-1)!.observedOn) : 'Накопление личной нормы'}</span></article>
     </section>
 
-    <Panel title="Историческая аномальность" subtitle="Числовые отклонения от личной нормы · выберите точку, чтобы увидеть сигналы на эту дату" className="historical-chart-panel" action={<div className="historical-period-switch" role="group" aria-label="Период графика">{([7, 30, 90] as Period[]).map(value => <button type="button" key={value} aria-pressed={period === value} className={period === value ? 'active' : ''} onClick={() => setPeriod(value)}>{value} дней</button>)}</div>}>
+    <Panel title="Историческая аномальность" subtitle="Числовые отклонения от личной нормы · выберите точку, чтобы увидеть сигналы на эту дату" className="historical-chart-panel" action={<div className="historical-period-switch" role="group" aria-label="Период графика">{([7, 30, 90] as HistoricalPeriod[]).map(value => <button type="button" key={value} aria-pressed={period === value} className={period === value ? 'active' : ''} onClick={() => setPeriod(value)}>{value} дней</button>)}</div>}>
       {loading ? <p className="historical-empty-state">Загружаем историю клиента…</p> : error ? <p className="historical-empty-state is-error" role="alert">История не загрузилась: {error}</p> : chartPoints.length === 0 ? <p className="historical-empty-state">Снимков пока нет. График появится после накопления первой истории.</p> : <>
         <div className="historical-chart"><ResponsiveContainer><LineChart data={chartPoints} margin={{ top: 14, right: 22, bottom: 6, left: 0 }} onClick={state => { const index = (state as unknown as { activeTooltipIndex?: number })?.activeTooltipIndex; if (typeof index === 'number' && chartPoints[index]) setSelectedDate(chartPoints[index].date); }}>
           <CartesianGrid stroke="#a9dfff18" vertical={false} />
-          <XAxis dataKey="date" tickFormatter={(value: string) => compactDate(value)} minTickGap={24} tick={{ fill: '#8eabc0', fontSize: 10 }} axisLine={{ stroke: '#a9dfff22' }} tickLine={false} />
-          <YAxis domain={[0, (dataMax: number) => Math.max(dataMax, 3.5)]} tick={{ fill: '#8eabc0', fontSize: 10 }} axisLine={false} tickLine={false} width={38} />
+          <XAxis dataKey="date" tickFormatter={(value: string) => compactDate(value)} minTickGap={24} tick={{ fill: '#8eabc0', fontSize: 14 }} axisLine={{ stroke: '#a9dfff22' }} tickLine={false} />
+          <YAxis domain={[0, (dataMax: number) => Math.max(dataMax, 3.5)]} tick={{ fill: '#8eabc0', fontSize: 14 }} axisLine={false} tickLine={false} width={38} />
           <Tooltip labelFormatter={value => { const point = points.find(item => item.observedOn === String(value)); return `${calendarDate(String(value))} · ${point?.settingsVersion ? `конфигурация v${point.settingsVersion}` : 'старая конфигурация'}`; }} formatter={value => [Number(value).toFixed(1) + 'σ', 'Отклонение числового профиля']} contentStyle={{ background: '#10283d', border: '1px solid #6ab9e533', borderRadius: 9, color: '#e4f4ff' }} />
-          <ReferenceLine y={3} stroke="#ff7778" strokeDasharray="5 5" label={{ value: 'Порог 3σ', position: 'insideTopRight', fill: '#ff8b8d', fontSize: 10 }} />
+          <ReferenceLine y={3} stroke="#ff7778" strokeDasharray="5 5" label={{ value: 'Порог 3σ', position: 'insideTopRight', fill: '#ff8b8d', fontSize: 14 }} />
           {selectedPoint && <ReferenceLine x={selectedPoint.observedOn} stroke="#7bc8f0" strokeDasharray="3 4" />}
           <Line type="monotone" dataKey="anomaly" name="Аномальность" stroke="#67cefb" strokeWidth={2.4} dot={{ r: 3, fill: '#10283d', stroke: '#67cefb', strokeWidth: 2, cursor: 'pointer' }} activeDot={{ r: 6, fill: '#c4eeff', stroke: '#42b9f0', strokeWidth: 2 }} />
         </LineChart></ResponsiveContainer></div>
