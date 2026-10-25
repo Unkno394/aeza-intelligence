@@ -14,8 +14,6 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub server: Server,
     pub auth: Auth,
-    #[serde(default)]
-    pub demo: Demo,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -70,26 +68,6 @@ pub struct Oidc {
     pub scopes: Vec<String>,
 }
 
-/// The synthetic customer stream of the demo-stream Compose profile.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct Demo {
-    pub interval_seconds: u64,
-    /// Virtual days of history replayed before live events; 0 skips it.
-    pub replay_days: u32,
-    pub replay_delay_ms: u64,
-}
-
-impl Default for Demo {
-    fn default() -> Self {
-        Self {
-            interval_seconds: 15,
-            replay_days: 60,
-            replay_delay_ms: 200,
-        }
-    }
-}
-
 fn default_session_hours() -> i32 {
     12
 }
@@ -139,19 +117,6 @@ impl Config {
                 "auth.default_user.login is empty"
             );
         }
-        let demo = &self.demo;
-        ensure!(
-            (2..=3600).contains(&demo.interval_seconds),
-            "demo.interval_seconds must be 2–3600"
-        );
-        ensure!(
-            demo.replay_days == 0 || (31..=365).contains(&demo.replay_days),
-            "demo.replay_days must be 0 or 31–365"
-        );
-        ensure!(
-            demo.replay_delay_ms <= 10_000,
-            "demo.replay_delay_ms must be at most 10000"
-        );
         Ok(())
     }
 
@@ -201,7 +166,6 @@ mod tests {
         assert_eq!(config.server.session_hours, 12);
         assert_eq!(config.origin(), "https://127.0.0.1:8080");
         assert!(!config.auth.default_user.enabled);
-        assert_eq!(config.demo.replay_days, 60);
     }
 
     #[test]
@@ -225,6 +189,5 @@ mod tests {
         assert!(error(&MINIMAL.replace("password", "oidc")).contains("requires an [auth.oidc] section"));
         let default_user = format!("{MINIMAL}\n[auth.default_user]\nenabled = true\n");
         assert!(error(&default_user).contains("login is empty"));
-        assert!(error(&format!("{MINIMAL}\n[demo]\nreplay_days = 7\n")).contains("0 or 31–365"));
     }
 }

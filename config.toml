@@ -45,13 +45,3 @@ issuer = "http://127.0.0.1:8081/realms/aeza"
 # OIDC_CLIENT_SECRET.
 client_id = "aeza-intelligence"
 scopes = ["openid", "email", "profile"]
-
-# Синтетические клиенты для демо: docker compose --profile demo up -d demo-stream.
-# Флаги командной строки demo_stream с теми же именами переопределяют эти значения.
-[demo]
-# Пауза между изменениями, в секундах (2–3600).
-interval_seconds = 15
-# Сколько виртуальных дней истории проиграть перед живыми событиями: 0 или 31–365.
-replay_days = 60
-# Пауза на один виртуальный день при проигрывании истории, в миллисекундах (до 10000).
-replay_delay_ms = 200

@@ -142,12 +142,18 @@ services:
       seed:
         condition: service_completed_successfully
 
-  # Synthetic customers, configured by [demo] of config.toml.
   demo-stream:
     <<: *app
     profiles: ["demo"]
     restart: unless-stopped
     entrypoint: ["demo_stream"]
+    environment:
+      DATABASE_URL: *database-url
+      DEMO_STREAM_INTERVAL_SECONDS: ${DEMO_STREAM_INTERVAL_SECONDS:-15}
+      DEMO_STREAM_CUSTOMERS: ${DEMO_STREAM_CUSTOMERS:-500}
+      DEMO_STREAM_BATCH_SIZE: ${DEMO_STREAM_BATCH_SIZE:-50}
+      DEMO_REPLAY_DAYS: ${DEMO_REPLAY_DAYS:-120}
+      DEMO_REPLAY_DELAY_MS: ${DEMO_REPLAY_DELAY_MS:-0}
     depends_on:
       seed:
         condition: service_completed_successfully
