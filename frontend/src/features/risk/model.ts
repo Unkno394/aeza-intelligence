@@ -2,7 +2,7 @@ import type {Account,Dataset,Settings,RiskResult} from '../../types';
 
 /** Local calculation kept for fixture previews; the live UI uses the Rust API. */
 export function calculateRisk(account: Account, data: Dataset, config: Settings): RiskResult {
- const services=data.services.filter(s=>s.accountId===account.id&&s.status!=='cancelled');
+ const services=data.services.filter(s=>s.accountId===account.id&&['active','suspended','prolong_wait'].includes(s.status));
  const tx=data.transactions.filter(t=>t.accountId===account.id);
  const asOf=Date.parse(data.asOf),windowEnd=asOf+config.renewalWindowDays*86400000;
  const due=services.filter(s=>{const at=Date.parse(s.renewsAt);return Number.isFinite(at)&&at>asOf&&at<=windowEnd;});
@@ -21,6 +21,7 @@ export function calculateRisk(account: Account, data: Dataset, config: Settings)
   {key:'failedProlong',label:'Подтверждённые неуспешные продления',value:failures?failures/Math.max(1,tx.filter(t=>t.billingType==='prolong'||t.type==='payment').length):null,available:failures>0,severity:0,points:0,explanation:'Неизвестные исходы продления не считаются отказом.'},
   {key:'expiringRevenue',label:'Выручка по скоро истекающим услугам',value:monthlyCents?expiringCents/monthlyCents:null,available:monthlyCents>0,severity:0,points:0,explanation:'Доля месячной выручки от услуг, истекающих в окне анализа.'},
   {key:'paymentCoverage',label:'Покрытие ближайших платежей',value:paymentCoverage,available:paymentCoverage!==null,severity:0,points:0,explanation:'Рассчитывается только если в окне есть определённые платежи.'},
+  {key:'priceRisk',label:'Ценовой риск',value:null,available:false,severity:0,points:0,explanation:'Нет подтверждённой калибровки на реальных данных.'},
  ];
  for(const factor of values)factor.severity=factor.value===null?0:factor.key==='paymentCoverage'?Math.max(0,1-Math.min(1,factor.value)):Math.min(1,Math.max(0,factor.value));
  const weights=values.reduce((sum,f)=>sum+(f.available?config.weights[f.key]:0),0)||1;

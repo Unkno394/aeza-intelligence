@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { ArrowRight, KeyRound, LoaderCircle, LockKeyhole, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { ArrowRight, KeyRound, LockKeyhole, RefreshCw, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { localLogin, login } from '../services/auth';
 import './login.css';
 
@@ -19,14 +19,32 @@ export default function Login({ status, error, retry, onSuccess }: { status: Log
   const [password,setPassword]=useState('');
   const [loginError,setLoginError]=useState('');
   const [busy,setBusy]=useState(false);
-  const [ssoEnabled,setSsoEnabled]=useState(false);
-  useEffect(()=>{fetch('/api/auth/methods').then(response=>response.ok?response.json():null).then(value=>setSsoEnabled(Boolean(value?.sso))).catch(()=>{});},[]);
+  const [authMethods,setAuthMethods]=useState<{sso:boolean;local:boolean}|null>(null);
+  useEffect(()=>{
+    const controller=new AbortController();
+    let cancelled=false;
+    const timeout=window.setTimeout(()=>controller.abort(),5000);
+    fetch('/api/auth/methods',{signal:controller.signal})
+      .then(response=>response.ok?response.json():null)
+      .then(value=>{if(!cancelled)setAuthMethods({sso:value?.sso===true,local:value?.local===true});})
+      .catch(()=>{if(!cancelled)setAuthMethods({sso:false,local:false});})
+      .finally(()=>window.clearTimeout(timeout));
+    return()=>{cancelled=true;window.clearTimeout(timeout);controller.abort();};
+  },[]);
   async function submit(event:FormEvent){event.preventDefault();setBusy(true);setLoginError('');try{await localLogin(username,password);onSuccess();}catch(cause){setLoginError(cause instanceof Error?cause.message:String(cause));}finally{setBusy(false);}}
   useEffect(() => {
     try { document.documentElement.dataset.theme = localStorage.getItem('aeza-theme') === 'light' ? 'light' : 'dark'; } catch { /* storage may be disabled */ }
   }, []);
 
   const authError = new URLSearchParams(location.search).get('authError');
+  const ssoEnabled=authMethods?.sso===true;
+  const localEnabled=authMethods?.local===true;
+  const redirect=status==='anonymous'&&ssoEnabled&&!localEnabled&&!authError;
+  useEffect(()=>{if(redirect)login();},[redirect]);
+
+  if(status==='loading'||(status==='anonymous'&&authMethods===null)||redirect){
+    return <div className="loading-state"><RefreshCw className="spin" size={26}/><h2>{redirect?'Переходим ко входу':status==='loading'?'Проверяем сессию':'Проверяем способы входа'}</h2></div>;
+  }
 
   return <main className="login-page">
     <div className="login-grid" aria-hidden="true" />
@@ -45,8 +63,6 @@ export default function Login({ status, error, retry, onSuccess }: { status: Log
         <h1 id="login-title">{status === 'error' ? 'Не удалось проверить вход' : 'Добро пожаловать'}</h1>
         <p className="login-description">Войдите, чтобы открыть аналитику клиентов и рынка.</p>
 
-        {status === 'loading' && <div className="login-state" role="status"><LoaderCircle className="login-spinner" size={18}/><span>Проверяем сессию…</span></div>}
-
         {status === 'error' && <div className="login-error" role="alert">
           <strong>Сервис авторизации временно недоступен</strong>
           <span>{error || 'Сервер не ответил на проверку сессии.'}</span>
@@ -56,14 +72,15 @@ export default function Login({ status, error, retry, onSuccess }: { status: Log
         {status === 'anonymous' && <>
           {authError && <div className="login-auth-error" role="alert"><TriangleAlert size={16}/><span>{errors[authError] ?? 'Не удалось завершить вход. Попробуйте ещё раз.'}</span></div>}
           {loginError && <div className="login-auth-error" role="alert"><TriangleAlert size={16}/><span>{loginError}</span></div>}
-          <form className="login-form" onSubmit={submit}>
+          {localEnabled&&<form className="login-form" onSubmit={submit}>
             <label>Логин<input autoComplete="username" value={username} onChange={event=>setUsername(event.target.value)} required/></label>
             <label>Пароль<input type="password" autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} required/></label>
             <button type="submit" className="login-primary" disabled={busy}><KeyRound size={17}/><span>{busy?'Входим…':'Войти'}</span><ArrowRight size={16}/></button>
-          </form>
-          <button type="button" className="login-primary" disabled={!ssoEnabled} title={!ssoEnabled?'Ожидает настройки OIDC-провайдера':undefined} onClick={() => { history.replaceState(null, '', location.pathname); login(); }}>
-            <KeyRound size={17}/><span>{ssoEnabled?'Войти через SSO':'SSO ожидает настройки'}</span><ArrowRight size={16}/>
-          </button>
+          </form>}
+          {ssoEnabled&&<button type="button" className="login-primary" onClick={() => { history.replaceState(null, '', location.pathname); login(); }}>
+            <KeyRound size={17}/><span>Войти через SSO</span><ArrowRight size={16}/>
+          </button>}
+          {!localEnabled&&!ssoEnabled&&<div className="login-auth-error" role="alert"><TriangleAlert size={16}/><span>Способ входа не настроен или API авторизации недоступен.</span></div>}
           <div className="login-security-note"><LockKeyhole size={14}/><span>Доступ защищён сессией</span></div>
         </>}
       </section>

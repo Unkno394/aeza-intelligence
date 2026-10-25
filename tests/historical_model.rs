@@ -92,6 +92,51 @@ fn sparse_history_does_not_make_confident_claims() {
 }
 
 #[test]
+fn daily_history_crosses_seven_thirty_ninety_and_one_twenty_day_boundaries() {
+    let config = HistoricalConfig {
+        expected_features: ["servers".to_owned()].into(),
+        minimum_observations: 5,
+        minimum_history_ms: 30 * DAY,
+        ..HistoricalConfig::default()
+    };
+    let mut model = HistoricalModel::new(config);
+    for day in 0..=120 {
+        let assessment = model.observe(day * DAY, &servers(10.0), None);
+        if day == 7 {
+            assert!(!assessment.is_confident);
+        }
+        if matches!(day, 30 | 90 | 120) {
+            assert!(assessment.is_confident, "day {day}");
+            assert_eq!(
+                assessment.metric_deviations["servers"].observations,
+                day as u64
+            );
+        }
+    }
+    let anomaly = model.observe(121 * DAY, &servers(100.0), None);
+    assert!(anomaly.is_confident);
+    assert!(anomaly.is_unusual);
+    assert!(anomaly.metric_deviations["servers"].score.unwrap() > 3.0);
+}
+
+#[test]
+fn missing_days_are_not_fabricated_as_observations() {
+    let config = HistoricalConfig {
+        expected_features: ["servers".to_owned()].into(),
+        minimum_observations: 5,
+        minimum_history_ms: 30 * DAY,
+        ..HistoricalConfig::default()
+    };
+    let mut model = HistoricalModel::new(config);
+    for day in [0, 1, 3, 6, 9] {
+        model.observe(day * DAY, &servers(10.0), None);
+    }
+    let latest = model.observe(10 * DAY, &servers(10.0), None);
+    assert_eq!(latest.metric_deviations["servers"].observations, 5);
+    assert!(!latest.is_confident);
+}
+
+#[test]
 fn an_unpaid_service_is_overdue_before_it_recovers() {
     let mut model = HistoricalModel::default();
     let empty = BTreeMap::new();

@@ -232,7 +232,34 @@ pub fn analyze_report(report: Report) -> serde_json::Value {
             }
         }
     }
-    for (key,text) in [("aeza_resources","Есть решения, где ни один доступный тариф Aéza не покрывает минимальные ресурсы. Проверьте линейку CPU/RAM/диска; снижение цены не устраняет этот этап ограничения."),("aeza_region","Есть решения без подходящего региона Aéza. Проверьте доступность нужных локаций; ценовая скидка не устраняет географическое ограничение."),("aeza_capacity","Есть решения без свободной мощности Aéza. Проверьте квоты до стимулирования спроса; инвестиционная окупаемость расширения здесь не рассчитана."),("aeza_budget","Есть решения, где подходящий тариф Aéza превышает бюджет. Проверьте результаты скидок ниже; улучшение прибыли не гарантируется."),("exogenous_departure_unknown_cause","Не назначайте случайным уходам ценовую причину: в модели это независимая вероятность. Для мер удержания нужны дополнительные наблюдения.")] {if let Some(n)=reasons.get(key){if *n>0 {actions.push(json!({"reason":key,"decision_events":n,"text":text,"status":"diagnostic_only_not_verified_intervention"}));}}}
+    for (key, text) in [
+        (
+            "aeza_resources",
+            "Есть решения, где ни один доступный тариф Aéza не покрывает минимальные ресурсы. Проверьте линейку CPU/RAM/диска; снижение цены не устраняет этот этап ограничения.",
+        ),
+        (
+            "aeza_region",
+            "Есть решения без подходящего региона Aéza. Проверьте доступность нужных локаций; ценовая скидка не устраняет географическое ограничение.",
+        ),
+        (
+            "aeza_capacity",
+            "Есть решения без свободной мощности Aéza. Проверьте квоты до стимулирования спроса; инвестиционная окупаемость расширения здесь не рассчитана.",
+        ),
+        (
+            "aeza_budget",
+            "Есть решения, где подходящий тариф Aéza превышает бюджет. Проверьте результаты скидок ниже; улучшение прибыли не гарантируется.",
+        ),
+        (
+            "exogenous_departure_unknown_cause",
+            "Не назначайте случайным уходам ценовую причину: в модели это независимая вероятность. Для мер удержания нужны дополнительные наблюдения.",
+        ),
+    ] {
+        if let Some(n) = reasons.get(key) {
+            if *n > 0 {
+                actions.push(json!({"reason":key,"decision_events":n,"text":text,"status":"diagnostic_only_not_verified_intervention"}));
+            }
+        }
+    }
     let candidates:Vec<_>=report.runs.iter().map(|r| {let mut v=summarize(r);
     v["segment_effects"]=json!(report.scenario.segments.iter().enumerate().map(|(index,g)|{let stats=|run:&Run|{let rows:Vec<_>=run.months.iter().flat_map(|m|&m.buyer_behavior).filter(|b|b.segment_index==index).collect();[rows.iter().map(|b|b.aeza_active).sum::<usize>() as i64,rows.iter().map(|b|b.first_leases+b.market_returns+b.switches_in).sum::<usize>() as i64,rows.iter().map(|b|b.renewals).sum::<usize>() as i64,rows.iter().map(|b|b.switches_out+b.exogenous_exits+b.choice_exits).sum::<usize>() as i64]};let current=stats(r);let base=stats(control);json!({"segment":g.name,"segment_index":index,"lease_months":current[0],"delta_lease_months":current[0]-base[0],"acquisitions":current[1],"delta_acquisitions":current[1]-base[1],"renewals":current[2],"delta_renewals":current[2]-base[2],"losses":current[3],"delta_losses":current[3]-base[3]})}).collect::<Vec<_>>());v["delta_final_clients"]=json!(r.months.last().unwrap().providers["aeza"].active_leases as i64-control.months.last().unwrap().providers["aeza"].active_leases as i64);v["delta_profit_rub"]=json!(money::float(profit_ticks(r)-profit_ticks(control)));v}).collect();
     let best = report.runs.iter().max_by_key(|r| profit_ticks(r)).unwrap();
@@ -244,7 +271,9 @@ pub fn analyze_report(report: Report) -> serde_json::Value {
             "rise_15" => "повышения текущих цен на 15%",
             _ => "текущей стратегии",
         };
-        format!("Среди проверенных цен максимальная прибыль у {label}. Используйте таблицу изменений спроса и потерь: рост прибыли не означает улучшения удержания.")
+        format!(
+            "Среди проверенных цен максимальная прибыль у {label}. Используйте таблицу изменений спроса и потерь: рост прибыли не означает улучшения удержания."
+        )
     } else {
         "Проверенные изменения цены не улучшают прибыль относительно контроля. Сохраните текущую стратегию в рамках этих допущений.".into()
     };
@@ -459,9 +488,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a["recommended_strategy"], "control");
-        assert!(a["report"]["runs"][0]["months"][0]["buyer_behavior"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert!(
+            a["report"]["runs"][0]["months"][0]["buyer_behavior"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 }

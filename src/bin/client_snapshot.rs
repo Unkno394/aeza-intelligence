@@ -536,6 +536,63 @@ mod tests {
     }
 
     #[test]
+    fn prolong_wait_to_deleted_after_five_days_is_a_timed_lifecycle_transition() {
+        let start = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let mut entered_wait = log(
+            "service",
+            "update",
+            Some(serde_json::json!({"status":"active"})),
+            Some(serde_json::json!({"status":"prolong_wait"})),
+            Some(42),
+        );
+        entered_wait.occurred_at = start;
+        let mut deleted = log(
+            "service",
+            "update",
+            Some(serde_json::json!({"status":"prolong_wait"})),
+            Some(serde_json::json!({"status":"deleted"})),
+            Some(42),
+        );
+        deleted.occurred_at = start + chrono::Duration::days(5);
+
+        let wait_event = events_from_log(&entered_wait).remove(0);
+        let delete_event = events_from_log(&deleted).remove(0);
+        assert_eq!(wait_event.kind, "prolong_wait");
+        assert_eq!(delete_event.kind, "deleted");
+        assert_eq!(wait_event.stream_id, delete_event.stream_id);
+        assert_eq!(
+            delete_event.occurred_at - wait_event.occurred_at,
+            chrono::Duration::days(5)
+        );
+
+        let mut model = HistoricalModel::default();
+        let empty = BTreeMap::new();
+        model.observe_with_event(
+            wait_event.occurred_at.timestamp_millis(),
+            &empty,
+            Some(BehaviorEvent {
+                stream_id: &wait_event.stream_id,
+                kind: &wait_event.kind,
+            }),
+        );
+        let result = model.observe_with_event(
+            delete_event.occurred_at.timestamp_millis(),
+            &empty,
+            Some(BehaviorEvent {
+                stream_id: &delete_event.stream_id,
+                kind: &delete_event.kind,
+            }),
+        );
+        let transition = result.transition.unwrap();
+        assert_eq!(transition.from, "prolong_wait");
+        assert_eq!(transition.to, "deleted");
+        assert_eq!(transition.elapsed_ms, 5 * 24 * 60 * 60 * 1_000);
+
+        let missing_transaction = log("transaction", "read", None, None, Some(42));
+        assert!(events_from_log(&missing_transaction).is_empty());
+    }
+
+    #[test]
     fn unknown_prolong_outcome_and_balance_top_up_are_recorded_separately() {
         let prolong = log(
             "transaction",

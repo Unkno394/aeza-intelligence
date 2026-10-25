@@ -1,448 +1,361 @@
-# Aéza Historical Model
+[![Rust](https://img.shields.io/badge/Rust-1.94-000000?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![React](https://img.shields.io/badge/React-19-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Database-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+[![OpenAPI](https://img.shields.io/badge/OpenAPI-3.0-6BA539?style=for-the-badge&logo=swagger&logoColor=white)](https://www.openapis.org/)
 
-This crate contains an online behavioral model for one customer at a time. It
-adapts the Welford embedding, transition graph, and LCS ideas from the local
-`/home/user/Documents/antifrod/backend/src/fraud` project to service and
-payment behavior. No training data is required before the first observation.
+# Aéza Intelligence
 
-## Quick start
+### Аналитическая платформа для оценки риска клиентов и развития VPS-продукта
 
-```sh
+Aéza Intelligence объединяет клиентскую аналитику, модель поведения, историю цен и сценарии развития рынка в одной панели. Платформа помогает команде находить клиентов, которым стоит уделить внимание, объяснять вклад сигналов и оценивать финансовый масштаб риска.
+
+> **Risk Score — объяснимый бизнес-индекс, а не обученная вероятность оттока.** Финансовая оценка показывает сценарий валовой выручки и не подменяет фактические потери.
+
+## Проект в одном экране
+
+| Возможность | Результат |
+|---|---|
+| Текущий риск | Балл 0–100, сегмент, факторы и карточка клиента с услугами и платежами |
+| Топ клиентов | Поиск, фильтры, двунаправленная сортировка и экспорт отчётов |
+| История поведения | Отклонения от личной нормы, редкие переходы состояний и необычные последовательности |
+| Ценовой риск | Сопоставление реальных повышений цен с продлениями, платежами и контрольными клиентами |
+| Финансовая оценка | Выручка под риском, дефицит ближайших платежей и отдельная 30-дневная сценарная оценка |
+| Рыночная аналитика | Сравнение тарифов, история цен конкурентов, поисковый интерес и сценарный симулятор |
+| Управление моделью | Настройки весов и порогов с сохранением версии, автора и времени изменения |
+| Обновление без перезагрузки | API пересчитывает оценки и передаёт обновления интерфейсу по WebSocket |
+
+## Архитектура
+
+~~~mermaid
+flowchart LR
+    analyst[Аналитик] --> ui[React + TypeScript<br/>веб-панель]
+    ui -->|OIDC authorization| idp[Keycloak или внешний IdP]
+    idp -->|callback| api
+    ui <-->|REST + WebSocket| api[Rust API<br/>Axum]
+    ui -->|защищённый proxy| simulator[Rust Market Simulator]
+
+    api <--> db[(PostgreSQL<br/>клиенты · услуги · транзакции<br/>настройки · история · рынок)]
+    snapshots[client_snapshot<br/>ежедневный сбор] --> db
+    market[market-collector<br/>тарифы · валюты] --> db
+    trends[TrendsMCP<br/>поисковый интерес · опционально] --> db
+
+    prom[Prometheus] -->|scrape /metrics| api
+    db --> api
+    api -->|snapshot · scores · settings| ui
+~~~
+
+### Основные компоненты
+
+| Компонент | Роль |
+|---|---|
+| <code>frontend/</code> | React-панель: обзор, список клиентов, профили, история, ценовой риск, рынок и настройки |
+| <code>market_api</code> | Rust/Axum API, сессии, чтение данных, расчёт Risk Score, импорт снимка и WebSocket |
+| <code>client_snapshot</code> | Ежедневные снимки признаков и событий для Historical Model |
+| <code>market_import</code>, <code>market_fx</code> | Загрузка рыночных тарифов и курсов валют в PostgreSQL |
+| <code>search_interest</code> | Сбор поискового интереса через TrendsMCP, если задан API-ключ |
+| <code>market-simulator/</code> | Изолированный сервис для сценариев спроса, конкуренции и тарифов |
+| PostgreSQL | Основное хранилище приложения; Compose подключается к существующей базе |
+| Keycloak | Локальный OIDC-провайдер для разработки; можно заменить внешним IdP |
+
+## Как рассчитывается риск
+
+Модель строит оценку из доступных признаков текущего снимка. Если признак отсутствует, его вес исключается из знаменателя: нехватка данных не превращается в нулевой риск.
+
+~~~mermaid
+flowchart LR
+    A[Снимок клиента] --> B[Расчёт признаков]
+    B --> C{Признак доступен?}
+    C -->|Да| D[Severity 0–1]
+    C -->|Нет| E[Исключить из оценки]
+    D --> F[Взвешенная сумма]
+    E --> F
+    F --> G[Нормализация доступных весов]
+    G --> H[Risk Score 0–100]
+    H --> I[Уровень и объяснение]
+~~~
+
+~~~text
+Risk Score = round(100 × Σ(weightᵢ × severityᵢ) / Σ(weightᵢ доступных признаков))
+~~~
+
+Вес умножается на выраженность сигнала. Для покрытия платежей выраженность растёт, когда доступного баланса не хватает на ближайшие платежи; для долевых признаков используется их доля в портфеле услуг или выручке.
+
+| Фактор | Что показывает | Вес по умолчанию |
+|---|---|---:|
+| Покрытие ближайших платежей | Отношение доступного баланса к сумме платежей в окне | 35 |
+| Услуги без автопродления | Доля действующих услуг без автопродления | 15 |
+| <code>prolong_wait</code> | Доля услуг, ожидающих оплаты | 15 |
+| Неуспешные продления | Только подтверждённые исходы; <code>not_performed</code> сам по себе не доказывает отказ | 10 |
+| Скоро истекающая выручка | Доля месячной выручки от услуг в окне продления | 25 |
+| Ценовой риск | Реальные ценовые события при достаточном качестве данных | 0 |
+
+По умолчанию пороги — **средний: 35**, **высокий: 65**. При недостатке признаков клиент получает отдельный статус <code>limited</code> или <code>insufficient</code>; это не то же самое, что низкий риск. Настройки модели можно менять в панели. Они сохраняются в PostgreSQL и применяются ко всем сессиям.
+
+### Ожидаемые потери и денежные метрики
+
+~~~text
+Ожидаемые потери за 30 дней =
+Σ по клиентам с достаточными данными
+  round(месячная выручка активных и приостановленных услуг × Risk Score / 100)
+~~~
+
+Это сценарная оценка валовой выручки. Risk Score не откалиброван как вероятность оттока, поэтому результат не является статистическим прогнозом или прибылью. Выручка клиентов с неполной оценкой показывается отдельно. Дефицит ближайших платежей считается отдельно и повторно в ожидаемые потери не добавляется.
+
+- **Выручка под риском** — месячная выручка по активным и приостановленным услугам клиентов высокого риска.
+- **Дефицит платежей** — сумма нехватки баланса на предстоящие платежи.
+- **Ожидаемые потери** — взвешенный Risk Score сценарий для клиентов с достаточными данными.
+
+Все денежные значения в API хранятся целыми числами в евроцентах: **100 евроцентов = 1 евро**. Интерфейс форматирует суммы в валюту отображения.
+
+## Данные и доменная модель
+
+Основные таблицы источника — <code>accounts</code>, <code>services</code> и <code>transactions</code>. Они поступают как полный текущий снимок; исторические изменения статусов и даты удаления в исходном архиве отсутствуют.
+
+| Поле | Значение |
+|---|---|
+| <code>balance</code> | Основной доступный баланс пользователя |
+| <code>withdrawBalance</code> | Реферальный баланс, доступный для вывода |
+| <code>bonusBalance</code>, <code>bonusState</code> | Бонусный баланс и состояние возможности его тратить |
+| <code>totalReplenished</code> | Общая сумма пополнений за всё время |
+| <code>price</code>, <code>paymentTerm</code> | Цена услуги и цикл оплаты: <code>hour</code>, <code>week</code>, <code>month</code>, <code>quarter_year</code>, <code>half_year</code>, <code>year</code> |
+| <code>autoprolong</code> | Автопродление услуги |
+| <code>services.status</code> | Текущее состояние услуги |
+| <code>transactions.status</code> | <code>performed</code> или <code>not_performed</code> |
+| <code>transactions.type</code> | <code>order</code> или <code>prolong</code> |
+
+| Статус услуги | Доменный смысл |
+|---|---|
+| <code>active</code> | Услуга активна и учитывается как регулярная выручка |
+| <code>suspended</code> | Услуга выключена пользователем; списания по текущей модели продолжаются |
+| <code>prolong_wait</code> | Услуга ожидает оплаты после <code>expiresAt</code>; доменное окно — 5 дней |
+| <code>deleted</code> | Услуга удалена клиентом или из-за неоплаты; снимок не различает причины |
+| <code>blocked</code> | Услуга заблокирована, использование и продление невозможны |
+
+<code>not_performed</code> не считается подтверждённой неудачной оплатой: в схеме источника нет окончательного результата отказа. История транзакций и текущий статус дают наблюдаемые факты, но не позволяют восстановить пропущенные переходы.
+
+### Снимок и история
+
+Однократный импорт содержит текущее состояние и не создаёт прошлую историю автоматически. <code>client_snapshot</code> начинает накапливать ежедневные наблюдения и новые события с момента запуска. Поэтому Historical Model становится информативнее со временем; он не может восстановить неизвестные изменения до начала сбора.
+
+Для демонстрации предусмотрен отдельный профиль <code>demo</code>: его синтетические аккаунты используют адреса <code>@example.test</code>; большинство также имеет отрицательные ID. В текущей локальной базе все 1710 аккаунтов являются тестовыми. Сценарные повышения хранятся отдельно от услуг и транзакций и никогда не меняют реальный Risk Score, финансовые метрики или журнал операций. На странице ценового риска есть явное переключение между синтетическими сценариями и реальными наблюдениями.
+
+## Historical Model
+
+Historical Model сравнивает клиента с его собственной историей и ищет необычные изменения во времени.
+
+- **Числовая норма:** статистика Welford и короткие/длинные профили с экспоненциальным затуханием.
+- **Изменение привычки:** сдвиг среднего между недавним и долгосрочным окном.
+- **Переходы услуг:** частота состояний и длительность ожидания, включая необычно долгий <code>prolong_wait</code>.
+- **Последовательности:** личные и межклиентские последовательности событий, сравнение окон через LCS и обнаружение повторяющихся паттернов.
+
+При стандартных настройках уверенный вывод требует минимум **10 полных наблюдений** и не менее **30 дней** истории. Период истории изменяется в настройках (7–365 дней). Необычность означает отличие от личной нормы; сама по себе она не доказывает отток или причину поведения.
+
+## Ценовой риск и рынок
+
+Страница ценового риска анализирует повышение цены услуги и последующее поведение: продления, расходы, изменение числа услуг и контрольную группу. Временная связь не доказывает причинность. В общий Risk Score фактор попадает только после серверной проверки объёма выборки, покрытия известных исходов и устойчивости эффекта в контрольных группах. Его вес по умолчанию равен нулю.
+
+Для хакатонного сценария после миграций выполните <code>psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/seed_linked_price_demo.sql</code>. Скрипт повторяемо связывает 720 гипотетических повышений с существующими тестовыми клиентами и услугами, выбирает 600 клиентов без повышения в качестве контролей и сохраняет 30-дневные исходы в отдельной таблице <code>price_demo_events</code>. Повторный запуск не дублирует события. API <code>/api/client/price-impact-demo</code> возвращает только эту выборку. Сценарный Risk Score в карточке клиента использует те же настраиваемые веса, но начисляет ценовой фактор лишь при достаточном числе известных исходов, контрольных пар и устойчивой связи в двух периодах. Снимок реального Risk Score при этом не меняется.
+
+Рыночная часть включает:
+
+- мониторинг тарифов и сохранённых изменений цены;
+- сравнение только сопоставимых конфигураций, периода оплаты и известных условий;
+- курсы EUR/RUB и USD/RUB для сравнения цен;
+- поисковый спрос по брендам через TrendsMCP (опциональный <code>TRENDSMCP_API_KEY</code>);
+- отдельный сценарный симулятор покупателей и реакции на цены.
+
+Результат сценарного симулятора — **модельный сценарий**, а не прогноз фактической выручки. Данные рынка и поведение клиентов отображаются как разные источники наблюдений.
+
+## Быстрый запуск
+
+Нужны Docker Compose, доступная PostgreSQL и <code>.env</code> с параметрами подключения.
+
+~~~sh
 cp .env.example .env
-# Set DATABASE_URL in .env to the existing PostgreSQL on this host,
-# and the OIDC_* variables (see Authentication below).
+~~~
+
+Заполни в <code>.env</code> как минимум <code>DATABASE_URL</code> и <code>KEYCLOAK_ADMIN_PASSWORD</code>. <code>DATABASE_URL</code> должен указывать на PostgreSQL, доступную с хоста, где запускается Compose. Приложение не поднимает отдельный контейнер базы данных: оно применяет миграции к указанной базе.
+
+~~~sh
 docker compose up -d --build
-```
+~~~
 
-Open http://127.0.0.1:8080. Compose uses the existing PostgreSQL, applies migrations, loads
-`scripts/data.json` when the client tables are empty, and runs the API, daily
-client snapshots, the competitor tariff and EUR→RUB collector (daily), the
-Market Simulator and the frontend HTTP server. Search interest is collected
-only when `TRENDSMCP_API_KEY` is set in `.env`; the Market Intelligence map
-includes a Google Trends regional CSV for the map. Ports and credentials
-can be overridden in `.env` (see `.env.example`). `docker compose down` stops
-the application containers; the existing database remains in place.
+Compose запускает миграции, API, ежедневный сбор клиентских снимков, рыночный сборщик, симулятор, Keycloak и frontend. Открой:
 
-### Authentication
+- Панель: <http://127.0.0.1:8080>
+- Keycloak: <http://127.0.0.1:5556>
+- API: <http://127.0.0.1:3000>
 
-The web UI and every `/api` route, including the `/api/client/ws` WebSocket and
-the Market Simulator behind the frontend proxy, require a session. For local
-sign-in, set `LOCAL_ADMIN_USER` and a unique `LOCAL_ADMIN_PASSWORD` of at least
-16 characters in `.env`. The local account has the `superadmin` role. Its
-sessions are stored in API memory and expire after `SESSION_HOURS`; a restart
-signs everyone out. The login page also supports OpenID Connect (Authorization
-Code + PKCE) with any provider that publishes
-`/.well-known/openid-configuration`:
+Обычный запуск не загружает тестовых клиентов. Если база пустая, сначала импортируй подготовленный снимок через API; исходный архив и его пароль не хранятся в репозитории. Для демонстрации на отдельной тестовой базе включи профиль <code>demo</code>.
 
-The Compose stack includes a local Keycloak provider at
-`http://127.0.0.1:8081`. Its Aéza realm, public PKCE client, and
-`analyst@aeza.local` account are imported on first start. Set
-`KEYCLOAK_ADMIN_PASSWORD` and `SSO_USER_PASSWORD` in `.env`; the SSO button
-then signs in as `analyst` using `SSO_USER_PASSWORD`. The Keycloak admin console
-uses username `admin` and `KEYCLOAK_ADMIN_PASSWORD`.
+По умолчанию используется локальный Keycloak realm <code>aeza</code>. Создай пользователя приложения:
 
-1. Register a client at the provider with redirect URI
-   `<PUBLIC_URL>/api/auth/callback` and post-logout redirect URI `<PUBLIC_URL>/`.
-2. Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (empty for a public
-   client) and, if users do not open `http://127.0.0.1:8080`, `PUBLIC_URL` in
-   `.env`. Open the UI only at `PUBLIC_URL`: cookies and the WebSocket origin
-   check are bound to it.
-3. Add the users to `public.admins`. The provider only proves the email
-   (`email_verified` must not be false); access is granted to an active row with
-   that email, case-insensitively:
+~~~sh
+bash scripts/auth_user.sh add analyst@example.com operator "Имя Аналитика"
+~~~
 
-   ```sql
-   INSERT INTO public.admins (email, name, role)
-   VALUES ('analyst@example.com', 'Analyst', 'viewer');
-   ```
+Скрипт попросит пароль и добавит пользователя в Keycloak и таблицу <code>public.admins</code>. Роли: <code>viewer</code> — чтение; <code>operator</code> и <code>superadmin</code> — также изменение настроек модели и загрузка снимка.
 
-   `viewer` reads everything; `operator` and `superadmin` may also change the
-   Risk Score settings. Setting `"isActive"` to false ends that admin's
-   sessions on their next request, and open WebSockets within 30 seconds.
+Остановить контейнеры, оставив базу и данные Keycloak:
 
-Sessions last `SESSION_HOURS` (12 by default) in an HttpOnly, SameSite=Lax
-cookie (`Secure` when `PUBLIC_URL` is https); `public.admin_sessions` stores
-only SHA-256 hashes of OIDC tokens. `market_api` refuses to start without either
-the local credentials or OIDC settings. For local development and the `scripts/check_*` scripts, which
-call the API directly, start it with `AUTH_DISABLED=true`: every request then
-acts as a superadmin, so never use it on a reachable host.
+~~~sh
+docker compose down
+~~~
 
-#### Check the login locally
+### Переменные окружения
 
-`docker-compose.dev-auth.yml` adds a local Keycloak (`127.0.0.1:5556`,
-`KEYCLOAK_PORT`) with the realm `aeza` and the client `aeza-intelligence`
-from `dev/keycloak/aeza-realm.json`, and points `api` at it in place of the
-`OIDC_*` and `AUTH_DISABLED` values from `.env`. Sign-in is a real
-email + password form; Keycloak keeps its accounts in the `keycloak-data`
-volume.
+| Переменная | Назначение |
+|---|---|
+| <code>DATABASE_URL</code> | Подключение к существующей PostgreSQL; обязательно |
+| <code>FRONTEND_PORT</code> | Порт панели, по умолчанию <code>8080</code> |
+| <code>KEYCLOAK_ADMIN_PASSWORD</code> | Пароль администратора локального Keycloak; обязателен для Compose |
+| <code>OIDC_ISSUER</code>, <code>OIDC_CLIENT_ID</code>, <code>OIDC_CLIENT_SECRET</code> | Внешний OIDC-провайдер; Keycloak используется по умолчанию |
+| <code>PUBLIC_URL</code> | Публичный адрес панели для callback и cookie |
+| <code>LOCAL_ADMIN_USER</code>, <code>LOCAL_ADMIN_PASSWORD</code> | Локальный вход без OIDC; задаются вместе |
+| <code>SESSION_HOURS</code> | Время сессии, по умолчанию 12 часов |
+| <code>TRENDSMCP_API_KEY</code> | Включает плановый сбор поискового интереса |
+| <code>AUTH_DISABLED</code> | Только для локальной разработки и скриптов; все запросы получают права superadmin |
 
-```sh
-docker compose -f docker-compose.yml -f docker-compose.dev-auth.yml up -d
-bash scripts/auth_user.sh add me@example.com operator "Имя Фамилия"   # asks for a password
-```
+Не включай <code>AUTH_DISABLED=true</code> на доступном из сети сервере. Перед production-развёртыванием настрой HTTPS и <code>PUBLIC_URL</code>, поменяй секреты Keycloak и ограничь сетевой доступ к API, документации и <code>/metrics</code>.
 
-Then open http://127.0.0.1:8080: it goes straight to the Keycloak form; sign in
-with that email and password. `scripts/auth_user.sh` creates the Keycloak account and the
-`public.admins` row together:
+## Импорт снимка клиентов
 
-```sh
-bash scripts/auth_user.sh role me@example.com viewer   # viewer | operator | superadmin
-bash scripts/auth_user.sh passwd me@example.com
-bash scripts/auth_user.sh disable me@example.com       # enable to restore
-bash scripts/auth_user.sh list
-```
+<code>PUT /api/v1/source/snapshot</code> принимает полный JSON-снимок из массивов <code>accounts</code>, <code>services</code> и <code>transactions</code>. Операция проверяет структуру и заменяет клиентский снимок в одной транзакции: при ошибке предыдущие данные сохраняются. Перед заменой рабочего набора сделай резервную копию.
 
-The Keycloak admin console is at http://127.0.0.1:5556/admin
-(`KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD`, `admin` / `admin` by default).
-An account created there also needs a `public.admins` row (`auth_user.sh role`
-does not create one; use `add`, or the SQL above).
-
-`bash scripts/check_auth.sh` starts Keycloak, the API and the frontend, creates
-test accounts `auth-*@aeza.test` and goes through the real Authorization Code +
-PKCE flow and the Keycloak login form via the frontend proxy. It checks 401
-without a session (HTTP, WebSocket, Market Simulator proxy), a wrong password,
-`returnTo`, cookie flags, the `forbidden`, `unverified`, `expired` and `denied`
-errors, the Origin check for the WebSocket and logout, that a viewer cannot
-change Risk Score settings and an operator can, that logout ends the session,
-and that deactivation ends it on the next request and closes an open WebSocket
-within 30 seconds. `--no-up` checks an already running stack, `--build`
-rebuilds the images first, `--cleanup` deactivates the test accounts.
-
-With dev auth on, `scripts/check_api.sh` and the other scripts that call
-`127.0.0.1:3000` get 401; `docker compose up -d api` restarts the API with the
-settings from `.env` again.
-
-## Inputs
-
-- Pass a numeric feature map to `HistoricalModel::observe` for each customer
-  snapshot. The PostgreSQL collector records service count, monthly spend,
-  spendable balance, payment coverage, upcoming payments and the four Snapshot
-  risk shares. Keep each feature's units consistent over time.
-- Pass real lifecycle or payment events with `observe_with_event`. Use the
-  service ID as `stream_id` so transitions from separate services are not
-  joined. An event-only update can use an empty feature map.
-- Periodic snapshots without an event must pass `None`. The model cannot infer
-  intermediate transitions that were not observed.
-- Pass observations for a customer in timestamp order. Timestamps are Unix
-  milliseconds.
-
-```rust
-use std::collections::BTreeMap;
-use aeza_intelligence::historical::{BehaviorEvent, HistoricalModel};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-let mut model = HistoricalModel::default();
-let features = BTreeMap::from([
-    ("server_count".to_owned(), 15.0),
-    ("financial_runway_days".to_owned(), 20.0),
-]);
-
-let assessment = model.observe_with_event(
-    1_780_000_000_000,
-    &features,
-    Some(BehaviorEvent {
-        stream_id: "service-42",
-        kind: "prolong_wait",
-    }),
-);
-let _ = assessment.familiarity;
-
-// Check a waiting service even when no new event has arrived.
-let pending = model.assess_pending_at(1_780_000_000_000 + 48 * 60 * 60 * 1_000);
-let _ = pending;
-
-// Store this compact JSON with the customer's record; restore it later.
-let saved = model.to_json()?;
-let restored = HistoricalModel::from_json(&saved)?;
-let _ = restored;
-Ok(())
+~~~json
+{
+  "accounts": [
+    {
+      "id": 101,
+      "email": "client@example.com",
+      "balance": 12000,
+      "withdrawBalance": 0,
+      "totalReplenished": 25000,
+      "bonusBalance": 0,
+      "bonusState": "locked"
+    }
+  ],
+  "services": [],
+  "transactions": []
 }
-```
+~~~
 
-## Interpretation
+Денежные поля — целые числа евроцентов. Сервис должен ссылаться на существующий аккаунт, транзакция — на существующую услугу. Swagger показывает актуальные схемы и ограничения.
 
-`familiarity` uses snapshot count, history duration, and completeness. The
-default model requires ten complete snapshots spanning the configured minimum
-history period (30 days by default) before it makes confident metric claims.
-The Settings page allows a 7–365 day history period. `event_familiarity` uses repeated transitions and their
-history span. Low familiarity prevents the model from making a confident claim.
-`is_unusual` means a customer's
-current behavior differs from their own history; it is not a churn probability.
-The Snapshot Model remains the source for current-state risk, especially when
-the historical profile is still sparse.
+## API
 
-The embedding keeps lifetime Welford statistics plus short and long profiles
-with exponential time decay. Only the decayed profiles decide current
-deviation, so an established new habit can become normal. Each metric also
-reports `baseline_shift` (recent mean minus long-term mean), which shows the
-direction of gradual changes such as declining server count. The graph records
-transition frequency and elapsed time. Watched states such as `prolong_wait`
-are checked for unusually long waits before a recovery event occurs.
+Бизнес-эндпоинты требуют авторизованную сессию. Полная документация доступна в Swagger UI и OpenAPI JSON.
 
-LCS compares each service's recent event sequence with the same customer's prior
-windows and with other customers. A bounded-gap frequent-subsequence miner groups
-similar sequences and reports only patterns supported by at least two customers;
-it does not require a hand-written template. The Historical page also explains
-feature and transition anomalies, their personal baseline, and the first
-consecutive snapshot or event where the deviation appeared. Similarity describes
-sequence shape; it does not establish churn or causation.
+| Метод | Путь | Назначение |
+|---|---|---|
+| <code>POST</code> | <code>/api/v1/auth/login</code> | Локальный вход по логину и паролю |
+| <code>GET</code> | <code>/api/v1/auth/me</code> | Текущая сессия и роль |
+| <code>POST</code> | <code>/api/v1/auth/logout</code> | Завершить сессию |
+| <code>GET</code> | <code>/api/v1/customers</code> | Список, поиск, фильтр риска, сортировка и пагинация |
+| <code>GET</code> | <code>/api/v1/customers/{id}</code> | Клиент, услуги, транзакции, Risk Score и факторы |
+| <code>GET</code> | <code>/api/v1/analytics/summary</code> | Сегменты риска, выручка, дефицит и ожидаемые потери |
+| <code>GET</code> | <code>/api/v1/model/settings</code> | Текущие веса, пороги и метаданные версии |
+| <code>PATCH</code> | <code>/api/v1/model/settings</code> | Сохранить настройки и пересчитать скоринг |
+| <code>PUT</code> | <code>/api/v1/source/snapshot</code> | Атомарно заменить клиентский снимок |
+| <code>GET</code> | <code>/api/v1/docs</code> | Swagger UI |
+| <code>GET</code> | <code>/api/v1/openapi.json</code> | Спецификация OpenAPI 3.0 |
+| <code>GET</code> | <code>/metrics</code> | Prometheus exposition format |
 
-The library provides JSON export and import for historical profiles. The
-PostgreSQL adapter loads customer datasets and computes current risk features.
-`client_snapshot` persists daily model state and assessments, consumes service
-and renewal changes from `operation_logs`, and infers expiry events between
-daily snapshots. The first run establishes the event-log starting point; old
-seed operations are not replayed as customer behavior.
+Пример сортировки клиентов по убыванию балла:
 
-## Market Intelligence
+~~~text
+GET /api/v1/customers?risk=high&sort=score&direction=desc&page=1&limit=25
+~~~
 
-### Continuous synthetic customer stream
+Для таблицы доступны сортировки по <code>id</code>, <code>email</code>, <code>balance</code>, <code>totalReplenished</code> и <code>score</code>; направления — <code>asc</code> и <code>desc</code>.
 
-The optional `demo-stream` service exercises the live pipeline without touching
-real customer rows. It owns three accounts named `demo-stream-*@example.test`
-with negative IDs and their nine services. Every 15 seconds it changes one
-account. The three profiles emphasize manual renewal and imminent expiry,
-insufficient funds near renewal, and `prolong_wait` with a `not_performed`
-renewal attempt. Each recovers after the risky phase, so both rising and falling
-scores can be observed. The ordinary database triggers append those writes to
-`operation_logs`; the API then recalculates Risk Score and pushes the changed
-dataset and scores over WebSocket. A `not_performed` transaction is an unpaid
-attempt in the fixture, not proof of customer churn.
+Интерфейс использует дополнительные эндпоинты <code>/api/client/*</code> для подробной аналитики, финансового журнала, ценовых событий, ежедневной истории и WebSocket <code>/api/client/ws</code>.
 
-On first start the service also replays 60 synthetic daily profiles through the
-real Historical Model into `client_snapshots`, ending yesterday. This creates a
-personal baseline and recent deviations in seconds; it does not pretend the
-current database rows were historically observed. The current day remains free
-for the normal snapshot collector. The Historical chart shows a separate
-**synthetic Risk Score** series for virtual days, calculated with the saved
-Snapshot coefficients and the same weighted-severity rule as the live API.
-This lets reviewers compare historical scenario risk with behavioral anomaly
-without treating either as a measured churn probability. Existing replay data
-is kept on restart when the window and settings version still match; otherwise
-only the demo clients' past snapshots are rebuilt.
+> <code>/metrics</code>, Swagger UI и OpenAPI JSON доступны без пользовательской сессии, чтобы их могли читать инструменты мониторинга и документации. Ограничь их доступ на уровне сети или reverse proxy. Доступ к клиентским и модельным API защищён серверной сессией.
 
-```sh
-# Start only the optional generator and its prerequisites; the normal stack may already run.
+### Метрики Prometheus
+
+<code>/metrics</code> публикует клиентские количества по уровням <code>high</code>, <code>medium</code>, <code>low</code>, <code>limited</code>, <code>insufficient</code>, финансовую оценку за 30 дней, MRR в оценке и вне неё, дефицит платежей и время последнего расчёта. Тестовые строки <code>@example.test</code> и отрицательные ID в эти производственные метрики не входят.
+
+## Live-обновление
+
+API следит за изменениями <code>operation_logs</code> и обновляет состояние клиентского набора. WebSocket отправляет:
+
+- <code>snapshot</code> — начальные данные, настройки и оценки;
+- <code>dataset</code> — изменившиеся аккаунты, услуги или транзакции;
+- <code>scores</code> — изменившиеся или удалённые оценки;
+- <code>settings</code> — новую версию коэффициентов;
+- <code>ack</code> / <code>error</code> — подтверждение запроса из интерфейса.
+
+При изменении коэффициентов сервер сохраняет конфигурацию, пересчитывает Risk Score и передаёт новый результат открытым сессиям. Frontend восстанавливает WebSocket с паузой при временном отключении.
+
+## Демоданные
+
+Для отдельной тестовой базы можно включить профиль <code>demo</code>:
+
+~~~sh
 docker compose --profile demo up -d --build demo-stream
-# Stop synthetic writes without removing the fixture or its history.
+~~~
+
+Он загружает синтетический seed только если клиентские таблицы пусты и запускает поток до 500 демонстрационных аккаунтов. Генератор обновляет профили порциями и может создать синтетическую историю для Historical Model. Остановить поток:
+
+~~~sh
 docker compose stop demo-stream
-# One change without Docker, or replay 90 virtual days and exit:
-cargo run --bin demo_stream -- --once
-cargo run --bin demo_stream -- --replay-days 90 --replay-only
-```
+~~~
 
-`DEMO_STREAM_INTERVAL_SECONDS` (2–3600), `DEMO_REPLAY_DAYS` (31–365) and
-`DEMO_REPLAY_DELAY_MS` (0–10000) control the Compose demo. The replay's virtual
-days are historical model test inputs; live Risk Score still uses the current
-accounts, services and transactions. The generator intentionally has no access
-to positive customer IDs.
+> Используй <code>demo</code> только с отдельной тестовой базой. Не подключай seed и поток демоданных к базе реальных клиентов.
 
-### Check both client models with generated data
+## Структура репозитория
 
-`scripts/check_models.sh` uses the Python generator to create 10 fake clients
-and 60 dated feature snapshots in a temporary directory. It runs both Rust
-models without a database and checks that Snapshot analysis returns all clients,
-Historical becomes confident after enough history, and the final behavior
-change for the first fixture account is detected.
+~~~text
+.
+├── src/
+│   ├── bin/                 # API, ежедневные снимки, импортеры, генераторы
+│   ├── adapter.rs           # PostgreSQL и клиентский снимок
+│   ├── analysis.rs          # поперечная аналитика клиентов
+│   ├── historical.rs        # модель личной истории
+│   ├── sequences.rs         # последовательности состояний услуг
+│   └── sql/                 # запросы рыночных и ценовых метрик
+├── frontend/
+│   └── src/
+│       ├── pages/           # Dashboard, Snapshot, Historical, Market, Settings
+│       └── features/        # модели риска, рынок и ценовой анализ
+├── market-simulator/        # отдельный Rust-сервис сценарного анализа
+├── migrations/              # миграции PostgreSQL
+├── docs/openapi-v1.json     # OpenAPI 3.0
+├── scripts/                 # импорт, сбор, демоданные и служебные команды
+├── docker-compose.yml
+└── README.md
+~~~
 
-Run `bash scripts/check_models.sh` for the offline check. The optional
-`bash scripts/check_models.sh --persist` adds 10 fixture clients with negative
-IDs to the existing PostgreSQL database, writes 60 historical snapshots for
-each, checks stored rows and the Rust analysis, Risk Score and Historical HTTP
-routes, runs the daily collector twice to check for duplicates, simulates two
-UTC days for one fixture account with `--as-of`, then opens
-Dashboard, Snapshot and Historical in headless Chromium and compares their
-Risk Score with the Rust API.
-Existing positive client IDs and identity sequences remain unchanged. The
-script refuses to reuse a negative ID owned by a non-fixture record. Dashboard and
-Snapshot receive the five-feature Risk Score over the `/api/client/ws`
-WebSocket (see [Live channel](#live-channel)); Snapshot reads the
-cross-client robust analysis from `GET /api/client/analysis`. Historical reads
-persisted daily state and compares recent sequences through
-`GET /api/client/historical/{id}/sequence-peers`. Automatically discovered
-cross-customer patterns are served by `GET /api/client/historical/patterns`.
+## Разработка
 
-### One PostgreSQL database
+Rust workspace:
 
-Set `DATABASE_URL` in `.env` to the existing `aeza_intelligence` database and
-run `bash scripts/migrate_database.sh`. This applies the market migrations
-(`001`–`004`) and the customer adapter migrations (`100`–`114`) to that same
-database. Customer tables live in `public`; market tables live in
-`market_intelligence`. The script verifies that all required tables exist and
-prints row counts. It does not create or replace a database. Docker Compose
-uses the same `DATABASE_URL`; see [Quick start](#quick-start).
+~~~sh
+cargo build --locked --workspace
+cargo test --locked --workspace
+~~~
 
-The client schema compatibility step recognises the former `scripts/001_schema.sql`
-tables, checks their required columns and converts their enum fields to text
-without deleting rows. SQLx then adds `admins`, `operation_logs`, the feature
-functions and `client_snapshots`. A partial or unfamiliar client schema causes
-the migration to stop with an explicit error for inspection.
+Frontend:
 
-Outside Docker, start the API with `cargo run --bin market_api`. It listens on
-`127.0.0.1:3000`; the Vite frontend proxies `/api` there. The API serves
-`/api/auth/{login,callback,me,logout}`, `/api/client/ws`, `/api/client/dataset`, `POST /api/client/snapshot`,
-`/api/client/analysis`,
-`/api/client/historical/{id}`, `/api/client/historical/{id}/sequence-peers`,
-`/api/client/historical/patterns`,
-and the three `/api/market/*` routes.
-For a one-time snapshot run, use `cargo run --bin client_snapshot` after
-loading `.env`. Run `bash scripts/check_api.sh` to print response counts.
-Client data is read-only in the frontend; Risk Score settings are stored in
-`public.client_settings`, versioned in `public.client_settings_history`, and
-shared by every session. Historical snapshots record the configuration version
-used to calculate them. Every route except
-`/api/auth/login`, `/callback` and `/logout` requires a session (see
-[Authentication](#authentication)).
+~~~sh
+cd frontend
+npm ci
+npm run dev
+npm run build
+npm test
+~~~
 
-### Live channel
+Полезные команды для работающего окружения:
 
-`GET /api/client/ws` upgrades to a WebSocket carrying JSON messages with a
-`type` field. The server sends:
+~~~sh
+bash scripts/check_api.sh
+bash scripts/check_auth.sh --no-up
+bash scripts/check_models.sh
+bash scripts/check_price_behavior.sh
+~~~
 
-- `snapshot` — `{dataset, settings, settingsMetadata, risks}` on connect and after a session
-  falls behind;
-- `dataset` — accounts, services or transactions changed (detected by polling
-  `operation_logs` every 2 seconds);
-- `scores` — `{changed, removed}`: only the accounts whose Risk Score changed,
-  after a data or settings change and at least once a minute, since scores
-  depend on the current time;
-- `settings` — Risk Score settings and their version metadata changed in any session;
-- `ack` / `error` — the reply to a client request (`error.requestId` is `null`
-  for an unreadable message).
-
-The client sends `{"type": "updateSettings", "requestId": "1", "settings": {...}}`.
-The settings are validated, saved with the editor and timestamp, and broadcast
-to every session together with the resulting `scores`. The frontend reconnects with exponential backoff and
-receives a fresh `snapshot` after each reconnect.
-
-Existing market rows remain in place. The migration runner records applied
-versions in `_sqlx_migrations` so repeated runs skip completed migrations.
-
-The [Wayback collector](docs/market-intelligence-wayback.md) and
-[PostgreSQL migration](migrations/001_market_intelligence.sql) store current
-and archived tariffs in the existing database. A database connection is
-required to verify persisted observations.
-
-### Search interest
-
-The active Market Intelligence source is **TrendsMCP** for Aéza, Hetzner,
-Contabo, Timeweb Cloud, Selectel, and FirstVDS. A verified terminal request
-returned a 14-week Hetzner series; the Rust collector uses the same curl
-transport by default and parses both a direct array and a JSON-string
-`body` wrapper. Run from the crate root:
-
-```sh
-bash scripts/collect_trends.sh
-```
-
-Use `cargo run --bin search_interest -- dry-run --keyword Hetzner` to verify
-HTTP and JSON without PostgreSQL. `bash scripts/collect_trends.sh` imports
-all six brands due for refresh and prints row counts. The scheduler can run
-with `cargo run --bin search_interest -- schedule` for weekly updates.
-Individual scores are normalized separately, so the page compares changes
-within each brand rather than ranking score levels between brands.
-The `comparison_group` column records each TrendsMCP keyword as a separate
-scale. The paired five-brand Google Trends import uses one shared group;
-`GET /api/market/search-interest/comparison` serves only that joint series.
-
-Google Trends Explore CSV import remains an optional path for a joint
-comparison and geography. Its automated web endpoint is rate-limited (429).
-Export **Interest over time** and **Interest by region** from one comparison
-of the same five terms, worldwide, over five years. Import both files with:
-
-```sh
-bash scripts/collect_trends.sh --timeline-csv /path/to/multiTimeline.csv --geo-csv /path/to/geoMap.csv
-```
-
-The CSV columns must be Aeza, Hetzner, Contabo, Timeweb Cloud, Selectel in
-that order. Both CSVs must come from the same comparison window, so their
-scores share a scale.
-
-The Market Intelligence map uses the bundled `frontend/src/data/geoMap.csv`
-(comparison of five brands, 24 October 2025–24 October 2026) to shade each
-country by the selected brand's share. The time-series chart reads the separate
-TrendsMCP series. The map geometry and CSV are bundled locally; it does not
-require a third-party chart script in the browser.
-The optional database importer still accepts paired timeline and geography
-exports. Google's official Trends API remains restricted to alpha testers.
-
-The Market Intelligence frontend shows a selected brand's weekly trend,
-aggregated monthly values, and 7/30-day changes. The geography map shows
-country data after a joint-comparison Google Trends CSV import. A 90-day
-free-tier series cannot provide a meaningful yearly chart.
-
-### Currency conversion for competitor tariffs
-
-After importing tariffs, load exchange rates for their observation dates:
-
-```sh
-cargo run --bin market_fx
-```
-
-For an HTTP and JSON check without PostgreSQL, run
-`cargo run --bin market_fx -- --dry-run --date 2025-10-01`.
-
-This applies pending migrations, fetches missing EUR/RUB and USD/RUB
-rates from Frankfurter without an API key, and exposes
-`market_intelligence.tariff_prices_rub`. The view retains the original
-`price_minor` and `currency`, and adds `price_rub_minor`, `rub_rate`, and
-`rub_rate_on`. RUB prices use rate 1. Missing historical rates leave the
-converted price `NULL`; the importer reports failed dates. Compare prices
-only for equivalent billing periods and VAT treatment.
-
-### Tariff identity, quality, and financial journal
-
-`market_intelligence.tariff_products.id` is the stable plan identity across
-configuration versions and price observations. `public.services.tariff_product_id`
-links an Aéza service to its plan; renewals inherit the link through
-`transactions.serviceId`. Existing services are linked only when their names
-exactly match an Aéza plan key. The API reports unlinked services so billing
-product IDs can be mapped explicitly instead of guessed.
-
-The signed simulator catalog supplies 80 available Aéza offers. Import it with
-`cargo run --bin market_import -- aeza-snapshot` or check the signature without
-a database using `cargo run --bin market_import -- aeza-snapshot --dry-run`.
-Docker's market collector imports the same catalog before scraping competitors.
-Normalized CPU, RAM, disk, region, traffic and known price conditions are
-stored alongside the source excerpt. Exact price medians require matching
-resource, region, traffic and VAT fields; missing fields remain unknown.
-
-`GET /api/market/prices/quality` reports coverage and missing FX rates.
-`GET /api/client/data-quality` reports real-client snapshot coverage, missing
-plan links and recent behavior events. `GET /api/client/financial-ledger/{id}`
-shows performed service charges and increases in `totalReplenished` recorded
-as topups. The current billing schema has no explicit refund type; a real
-refund feed is required before refunds can be classified.
-
-With PostgreSQL and network access available on the host, run
-`bash scripts/check_market_live.sh`. It applies migrations, imports the Aéza
-catalog, collects Contabo, fetches FX, then checks the price and quality APIs.
-
-### Run and verify the system
-
-The Rust API listens on `127.0.0.1:3000` and serves the three Market routes
-plus client dataset, the `/api/client/ws` live channel, Rust analysis and
-historical snapshots. Vite proxies `/api` (including the WebSocket) to that
-process. The client dashboard uses the PostgreSQL dataset; Risk Score settings
-are stored on the server in `public.client_settings`. Start the existing
-local cluster on the host if it is not already running:
-
-```sh
-pg_ctl -D .local/postgres -o '-k /tmp -p 55432 -h 127.0.0.1' -l .local/postgres.log start
-set -a; . ./.env; set +a
-bash scripts/migrate_database.sh
-bash scripts/collect_market.sh
-bash scripts/collect_trends.sh
-cargo run --bin client_snapshot
-cargo run --bin market_api
-```
-
-In another terminal, run `bash scripts/check_api.sh` to verify response counts,
-including the search series per brand. Then start the frontend with
-`cd frontend && npm run dev`. On Arch Linux, `docker compose up -d --build api
-snapshots` runs the API and daily snapshot scheduler against the same database;
-`docker compose --profile collectors up -d trends` additionally schedules
-TrendsMCP updates when `TRENDSMCP_API_KEY` is set.
-
-This sandbox cannot connect to the host PostgreSQL or external APIs, so live
-row counts and HTTP responses must be checked in the host environment.
+<code>check_auth.sh</code> выполняет полный сценарий входа через Keycloak; <code>check_models.sh</code> использует тестовые данные. Для live-проверок нужны соответствующие сервисы и PostgreSQL.

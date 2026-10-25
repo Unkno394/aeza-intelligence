@@ -180,12 +180,12 @@ export function MarketSimulatorWizard({
     run: report.runs.find(run => run.strategy === 'baseline' && run.sensitivity === level)
   })).filter((item): item is { level: Sensitivity; run: SimulationRun } => Boolean(item.run)) : [];
   const presetDescription = preset === 'akash'
-    ? 'Подставляет только относительную помесячную форму притока из исторических наблюдений Akash. Число покупателей в месяц и бюджеты остаются сценарными; веса повторяются, если горизонт длиннее архива.'
+    ? 'Экспериментальный источник: только относительная помесячная форма притока Akash. Число покупателей и бюджеты остаются сценарными; веса повторяются, если горизонт длиннее архива.'
     : preset === 'budget'
       ? 'Ставит приток равным по месяцам и снижает бюджеты шаблонных сегментов на 30%. Это модельное изменение, а не измерение бюджетов клиентов.'
       : 'Задаёт одинаковый относительный вес притока для каждого месяца. Объём покупателей и бюджеты остаются заданными в сценарии.';
   const activeInfo = [
-    'Задайте границы рынка и исходный спрос. Сценарий Akash использует историческую форму притока, а масштаб покупателей остаётся вашим допущением.',
+    'Задайте границы рынка и модельный приток. Akash доступен как отдельный экспериментальный вариант распределения по месяцам.',
     'Укажите цены Aéza и выберите варианты для сравнения. Результаты покажут разницу между стратегиями при одинаковых условиях спроса.',
     'Задайте бюджеты сегментов и при необходимости включите затраты, уход, переходы и ограничения ресурсов.',
     'Запустите расчёт. Это сценарная модель рынка, а не точный прогноз поведения реальных клиентов.'
@@ -230,9 +230,9 @@ export function MarketSimulatorWizard({
             <div className="market-wizard-grid">
               <label>Сценарий рынка
                 <GlassSelect aria-label="Сценарий рынка" value={preset} onChange={onPresetChange} options={[
-                  { value: 'akash', label: 'Динамика Akash' },
                   { value: 'flat', label: 'Ровный приток' },
-                  { value: 'budget', label: 'Бюджеты ниже на 30%' }
+                  { value: 'budget', label: 'Бюджеты ниже на 30%' },
+                  { value: 'akash', label: 'Akash · эксперимент' }
                 ]} />
                 <small>{presetDescription}</small>
               </label>
@@ -389,7 +389,7 @@ export function MarketSimulatorWizard({
             </header>
             <div className="market-wizard-review">
               <div><span className="market-wizard-review-icon"><MapPin size={17} /></span><span><small>Рынок и горизонт</small><strong>{draft.market === 'russia' ? 'Россия' : draft.market === 'international' ? 'Международный рынок' : 'Общий рынок'} · {city} · {draft.months} мес.</strong></span></div>
-              <div><span className="market-wizard-review-icon"><Users size={17} /></span><span><small>Новые модельные покупатели</small><strong>{draft.buyers_per_month} в месяц · seed {draft.seed}</strong><small>Объём и бюджеты заданы сценарием; Akash задаёт только форму притока.</small></span></div>
+              <div><span className="market-wizard-review-icon"><Users size={17} /></span><span><small>Новые модельные покупатели</small><strong>{draft.buyers_per_month} в месяц · seed {draft.seed}</strong><small>Объём и бюджеты заданы сценарием; {preset === 'akash' ? 'эксперимент Akash задаёт форму притока.' : 'приток равномерный по месяцам.'}</small></span></div>
               <div><span className="market-wizard-review-icon"><Wallet size={17} /></span><span><small>Цены · {priceSource === 'observed' ? 'проверенный снимок' : 'сценарные цены'}</small><strong>{estimate} · {strategies.map(name => strategyLabels[name] ?? name).join(', ') || 'стратегии не выбраны'}</strong></span></div>
               <div><span className="market-wizard-review-icon"><Gauge size={17} /></span><span><small>Бюджеты сегментов</small><strong>{draft.segments.length} модельных сегмента · заданы в сценарии</strong></span></div>
               <div><span className="market-wizard-review-icon"><Gauge size={17} /></span><span><small>Чувствительность</small><strong>{draft.sensitivities.map(value => sensitivityLabels[value]).join(', ') || 'не выбрана'}</strong></span></div>

@@ -1,0 +1,123 @@
+name: Integration
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  offline-models:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: cargo test --locked
+      - run: cargo fmt --all -- --check
+      - run: git diff --check
+      - run: cargo run --locked --bin model_smoke -- scripts/fixtures/full_model_stress/model_history.json
+      - run: cargo test --manifest-path market-simulator/Cargo.toml --locked
+      - run: npm ci && npm test && npm run build
+        working-directory: frontend
+
+  postgres-fixtures:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgres://aeza_fixture:ci-fixture-password@127.0.0.1:5432/aeza_fixture_check
+      V1_API_TEST_DATABASE_URL: postgres://aeza_fixture:ci-fixture-password@127.0.0.1:5432/aeza_v1_api_test
+      TEST_DATABASE_URL: postgres://aeza_fixture:ci-fixture-password@127.0.0.1:5432/aeza_snapshot_test
+      MARKET_TEST_DATABASE_URL: postgres://aeza_fixture:ci-fixture-password@127.0.0.1:5432/aeza_market_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y postgresql postgresql-client
+      - name: Start clean local PostgreSQL
+        run: |
+          pg_version="$(ls /etc/postgresql | sort -V | tail -1)"
+          sudo pg_ctlcluster "$pg_version" main start || true
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE aeza_fixture LOGIN PASSWORD 'ci-fixture-password'"
+          sudo -u postgres createdb -O aeza_fixture aeza_fixture_check
+          sudo -u postgres createdb -O aeza_fixture aeza_v1_api_test
+          sudo -u postgres createdb -O aeza_fixture aeza_snapshot_test
+          sudo -u postgres createdb -O aeza_fixture aeza_market_test
+          pg_isready -h 127.0.0.1 -p 5432
+      - name: Verify migrations, fixture replay and SQL analytics
+        run: bash scripts/check_clean_fixture_db.sh
+      - name: Verify v1 HTTP API against disposable PostgreSQL
+        run: cargo test --locked --test v1_api -- --nocapture
+      - name: Verify source snapshot replacement and rollback
+        run: cargo test --locked --test snapshot_replace -- --nocapture
+      - name: Verify market observation identity and price history
+        run: cargo test --locked --test market_store -- --nocapture
+
+  compose-browser-e2e:
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: aeza-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      DATABASE_URL: postgres://aeza_fixture:ci-fixture-password@127.0.0.1:5432/aeza_browser_test
+      FRONTEND_PORT: '18080'
+      KEYCLOAK_PORT: '15556'
+      PUBLIC_URL: http://127.0.0.1:18080
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ci-keycloak-admin-password
+      KEYCLOAK_CLIENT_SECRET: ci-oidc-test-client-secret
+      E2E_USERNAME: auth-operator@aeza.test
+      E2E_PASSWORD: auth-check-Passw0rd
+      BROWSER_BIN: chrome
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres-ci-root-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: browser-actions/setup-chrome@v1
+      - name: Create isolated application database
+        run: |
+          export PGPASSWORD=postgres-ci-root-password
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE aeza_fixture LOGIN PASSWORD 'ci-fixture-password'"
+          createdb -h 127.0.0.1 -U postgres -O aeza_fixture aeza_browser_test
+      - name: Load deterministic browser fixture
+        run: bash scripts/check_clean_fixture_db.sh
+      - name: Build isolated Compose stack and run SSO checks
+        run: |
+          trap 'docker compose down --volumes --remove-orphans' EXIT
+          docker compose up -d --build --wait keycloak api frontend simulator snapshots market-collector
+          bash scripts/check_auth.sh --no-up
+          bash scripts/check_performance.sh
+          bash scripts/check_compose_stack.sh
+          node scripts/browser_acceptance.mjs
+
+  test-report:
+    if: always()
+    needs: [offline-models, postgres-fixtures, compose-browser-e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize test groups
+        env:
+          OFFLINE: ${{ needs.offline-models.result }}
+          POSTGRES: ${{ needs.postgres-fixtures.result }}
+          COMPOSE: ${{ needs.compose-browser-e2e.result }}
+        run: |
+          {
+            echo '# Aéza Intelligence CI test report'
+            echo
+            echo '| Test group | Result |'
+            echo '| --- | --- |'
+            echo "| Rust unit/integration, simulator, frontend, build, formatting | $OFFLINE |"
+            echo "| PostgreSQL fixtures, API, replacement and market store | $POSTGRES |"
+            echo "| Compose startup, OIDC and browser acceptance | $COMPOSE |"
+          } >> "$GITHUB_STEP_SUMMARY"
+

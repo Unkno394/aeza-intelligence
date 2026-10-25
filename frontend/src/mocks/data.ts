@@ -1,5 +1,5 @@
 import type { Dataset, Settings } from '../types';
-export const defaults: Settings = {weights:{paymentCoverage:35,noAutoProlong:15,prolongWait:15,failedProlong:10,expiringRevenue:25},mediumThreshold:35,highThreshold:65,renewalWindowDays:14,historicalMinDays:30};
+export const defaults: Settings = {weights:{paymentCoverage:35,noAutoProlong:15,prolongWait:15,failedProlong:10,expiringRevenue:25,priceRisk:0},mediumThreshold:35,highThreshold:65,renewalWindowDays:14,historicalMinDays:30};
 const names = ['Alex Morgan','Sofia Weber','Dmitry Volkov','Emma Wilson','Lucas Martin','Anna Schmidt','Oliver Brown','Maria Garcia','Noah Fischer','Kate Anderson'];
 const balances = [420,18200,850,7200,120,31500,2250,5800,990,12300];
 export function createDataset(): Dataset {

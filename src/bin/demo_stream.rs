@@ -10,7 +10,6 @@ use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 
 const ACCOUNT_BASE: i64 = -8_500_000;
 const SERVICE_BASE: i64 = -8_600_000;
-const CUSTOMERS: i64 = 3;
 const SERVICES_PER_CUSTOMER: i64 = 3;
 
 #[derive(Parser)]
@@ -21,6 +20,12 @@ struct Args {
     /// Seconds between changes; 15 is useful for a live demo.
     #[arg(long, env = "DEMO_STREAM_INTERVAL_SECONDS", default_value_t = 15)]
     interval_seconds: u64,
+    /// Number of isolated fixture clients to keep in the stream.
+    #[arg(long, env = "DEMO_STREAM_CUSTOMERS", default_value_t = 120)]
+    customers: i64,
+    /// Number of different fixture clients updated at each tick.
+    #[arg(long, env = "DEMO_STREAM_BATCH_SIZE", default_value_t = 12)]
+    batch_size: i64,
     /// Seed demo rows and emit one change, then exit.
     #[arg(long)]
     once: bool,
@@ -43,6 +48,14 @@ async fn main() -> Result<()> {
         "interval must be 2–3600 seconds"
     );
     ensure!(
+        (1..=500).contains(&args.customers),
+        "customers must be 1–500"
+    );
+    ensure!(
+        (1..=args.customers).contains(&args.batch_size),
+        "batch size must be 1–customers"
+    );
+    ensure!(
         args.replay_days == 0 || (31..=365).contains(&args.replay_days),
         "replay days must be 31–365"
     );
@@ -58,9 +71,15 @@ async fn main() -> Result<()> {
         .max_connections(2)
         .connect(&args.database_url)
         .await?;
-    seed(&pool).await?;
+    seed(&pool, args.customers).await?;
     if args.replay_days > 0 {
-        replay(&pool, args.replay_days, args.replay_delay_ms).await?;
+        replay(
+            &pool,
+            args.replay_days,
+            args.replay_delay_ms,
+            args.customers,
+        )
+        .await?;
     }
     if args.replay_only {
         return Ok(());
@@ -71,10 +90,16 @@ async fn main() -> Result<()> {
         let slot = chrono::Utc::now()
             .timestamp()
             .div_euclid(args.interval_seconds as i64);
-        let customer = slot.rem_euclid(CUSTOMERS);
-        let phase = slot.div_euclid(CUSTOMERS).rem_euclid(5);
-        emit(&pool, customer, phase).await?;
-        eprintln!("demo stream: customer {} phase {}", customer + 1, phase);
+        for offset in 0..args.batch_size {
+            let position = slot * args.batch_size + offset;
+            let customer = position.rem_euclid(args.customers);
+            let phase = stream_phase(position, customer, args.customers);
+            emit(&pool, customer, phase).await?;
+        }
+        eprintln!(
+            "demo stream: updated {} of {} fixture clients",
+            args.batch_size, args.customers
+        );
         if args.once {
             break;
         }
@@ -82,7 +107,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn replay(pool: &PgPool, days: u32, delay_ms: u64) -> Result<()> {
+async fn replay(pool: &PgPool, days: u32, delay_ms: u64, customers: i64) -> Result<()> {
     let settings_row = sqlx::query("SELECT version, settings FROM public.client_settings WHERE id")
         .fetch_optional(pool)
         .await?;
@@ -100,33 +125,36 @@ async fn replay(pool: &PgPool, days: u32, delay_ms: u64) -> Result<()> {
     // Leave today free for the real collector to add a snapshot from live data.
     let last_historical_day = chrono::Utc::now().date_naive() - chrono::Duration::days(1);
     let first_historical_day = last_historical_day - chrono::Duration::days(i64::from(days - 1));
-    let existing: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM public.client_snapshots WHERE account_id = $1 \
-         AND observed_on BETWEEN $2 AND $3 AND settings_version = $4",
+    let total_existing: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM public.client_snapshots s JOIN public.accounts a ON a.id = s.account_id \
+         WHERE s.account_id BETWEEN $1 AND $2 AND a.email LIKE 'demo-stream-%@example.test' \
+         AND s.observed_on BETWEEN $3 AND $4 AND s.settings_version = $5",
     )
+    .bind(ACCOUNT_BASE - customers)
     .bind(ACCOUNT_BASE - 1)
     .bind(first_historical_day)
     .bind(last_historical_day)
     .bind(settings_version)
     .fetch_one(pool)
     .await?;
-    if existing >= i64::from(days) {
-        eprintln!("demo replay: {existing} snapshots already exist; skipping");
+    if total_existing >= i64::from(days) * customers {
+        eprintln!("demo replay: {total_existing} snapshots already exist; skipping");
         return Ok(());
     }
     sqlx::query(
-        "DELETE FROM public.client_snapshots WHERE account_id IN ($1, $2, $3) AND observed_on <= $4",
+        "DELETE FROM public.client_snapshots s USING public.accounts a \
+         WHERE s.account_id = a.id AND s.account_id BETWEEN $1 AND $2 \
+         AND a.email LIKE 'demo-stream-%@example.test' AND s.observed_on <= $3",
     )
+    .bind(ACCOUNT_BASE - customers)
     .bind(ACCOUNT_BASE - 1)
-    .bind(ACCOUNT_BASE - 2)
-    .bind(ACCOUNT_BASE - 3)
     .bind(last_historical_day)
     .execute(pool)
     .await?;
     let cursor: i64 = sqlx::query_scalar("SELECT COALESCE(max(id), 0) FROM public.operation_logs")
         .fetch_one(pool)
         .await?;
-    let mut models: Vec<HistoricalModel> = (0..CUSTOMERS)
+    let mut models: Vec<HistoricalModel> = (0..customers)
         .map(|_| {
             HistoricalModel::new(HistoricalConfig {
                 minimum_history_ms: historical_min_days * 86_400_000,
@@ -138,9 +166,10 @@ async fn replay(pool: &PgPool, days: u32, delay_ms: u64) -> Result<()> {
         let date = last_historical_day - chrono::Duration::days(i64::from(days - day - 1));
         let observed_at = date.and_hms_opt(0, 0, 0).expect("valid midnight").and_utc();
         let mut tx = pool.begin().await?;
-        for customer in 0..CUSTOMERS {
+        for customer in 0..customers {
             let account_id = ACCOUNT_BASE - customer - 1;
-            let stress_days = match customer {
+            let profile = customer.rem_euclid(3);
+            let stress_days = match profile {
                 0 => 10,
                 1 => 7,
                 _ => 3,
@@ -151,11 +180,11 @@ async fn replay(pool: &PgPool, days: u32, delay_ms: u64) -> Result<()> {
             let stress_start = days - stress_days;
             let event = if day == 0 {
                 Some("active")
-            } else if customer != 1 && day == stress_start {
+            } else if profile != 1 && day == stress_start {
                 Some("auto_renew_off")
-            } else if customer == 2 && day == stress_start + 1 {
+            } else if profile == 2 && day == stress_start + 1 {
                 Some("prolong_wait")
-            } else if customer == 2 && day == stress_start + 2 {
+            } else if profile == 2 && day == stress_start + 2 {
                 Some("prolong_outcome_unknown")
             } else {
                 None
@@ -175,10 +204,10 @@ async fn replay(pool: &PgPool, days: u32, delay_ms: u64) -> Result<()> {
                 );
             }
             let assessment = model.observe(observed_at.timestamp_millis(), &features, None);
-            let mut assessment_json = serde_json::to_value(&assessment)?;
-            assessment_json["snapshot_risk_score"] =
-                serde_json::json!(replay_risk_score(&features, settings.as_ref()));
-            assessment_json["synthetic_replay"] = serde_json::json!(true);
+            let assessment_json = mark_synthetic_replay(
+                serde_json::to_value(&assessment)?,
+                replay_risk_score(&features, settings.as_ref()),
+            );
             // The next real daily collector starts after the historical replay,
             // so initial fixture inserts are not counted again as behavior.
             model.set_event_log_cursor(cursor);
@@ -207,11 +236,12 @@ async fn replay(pool: &PgPool, days: u32, delay_ms: u64) -> Result<()> {
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
         }
     }
-    eprintln!("demo replay: built {days} daily snapshots for {CUSTOMERS} fixture clients");
+    eprintln!("demo replay: built {days} daily snapshots for {customers} fixture clients");
     Ok(())
 }
 
 fn replay_features(day: u32, customer: i64, stressed: bool) -> BTreeMap<String, f64> {
+    let profile = customer.rem_euclid(3);
     let ordinary_variation = (day % 7) as f64 * 0.01;
     BTreeMap::from([
         ("services_count".into(), 3.0),
@@ -225,7 +255,7 @@ fn replay_features(day: u32, customer: i64, stressed: bool) -> BTreeMap<String, 
         ),
         (
             "spendable_balance".into(),
-            if stressed && customer != 0 {
+            if stressed && profile != 0 {
                 300.0
             } else {
                 3000.0
@@ -237,19 +267,15 @@ fn replay_features(day: u32, customer: i64, stressed: bool) -> BTreeMap<String, 
         ),
         (
             "payment_coverage".into(),
-            if stressed && customer != 0 {
-                0.1
-            } else {
-                1.875
-            },
+            if stressed && profile != 0 { 0.1 } else { 1.875 },
         ),
         (
             "no_auto_prolong_share".into(),
-            if stressed && customer != 1 { 0.67 } else { 0.0 },
+            if stressed && profile != 1 { 0.67 } else { 0.0 },
         ),
         (
             "prolong_wait_share".into(),
-            if stressed && customer == 2 { 0.33 } else { 0.0 },
+            if stressed && profile == 2 { 0.33 } else { 0.0 },
         ),
         (
             "expiring_revenue_share".into(),
@@ -299,9 +325,18 @@ fn replay_risk_score(
     }
 }
 
-async fn seed(pool: &PgPool) -> Result<()> {
+fn mark_synthetic_replay(
+    mut assessment: serde_json::Value,
+    snapshot_risk_score: i64,
+) -> serde_json::Value {
+    assessment["snapshot_risk_score"] = serde_json::json!(snapshot_risk_score);
+    assessment["synthetic_replay"] = serde_json::json!(true);
+    assessment
+}
+
+async fn seed(pool: &PgPool, customers: i64) -> Result<()> {
     let mut tx = pool.begin().await?;
-    for customer in 0..CUSTOMERS {
+    for customer in 0..customers {
         let account_id = ACCOUNT_BASE - customer - 1;
         let email = format!("demo-stream-{}@example.test", customer + 1);
         sqlx::query(
@@ -323,18 +358,19 @@ async fn seed(pool: &PgPool) -> Result<()> {
             let name = format!("demo-stream-{}-{}", customer + 1, service + 1);
             sqlx::query(
                 "INSERT INTO public.services (id, name, \"ownerId\", \"paymentTerm\", \"autoProlong\", \"createdAt\", \"expiresAt\", status, price) \
-                 VALUES ($1, $2, $3, 'month', true, now() - interval '1 day', now() + interval '14 days', 'active', $4) \
+                 VALUES ($1, $2, $3, 'month', true, now() - interval '60 days', now() + interval '14 days', 'active', $4) \
                  ON CONFLICT (id) DO NOTHING",
             )
             .bind(service_id).bind(&name).bind(account_id).bind(800 + service * 200)
             .execute(&mut *tx).await?;
-            let row = sqlx::query("SELECT name, \"ownerId\"::bigint AS owner_id FROM public.services WHERE id = $1")
-                .bind(service_id)
-                .fetch_one(&mut *tx)
-                .await?;
+            let row = sqlx::query(
+                "SELECT name, \"ownerId\"::bigint AS owner_id FROM public.services WHERE id = $1",
+            )
+            .bind(service_id)
+            .fetch_one(&mut *tx)
+            .await?;
             ensure!(
-                row.get::<String, _>("name") == name
-                    && row.get::<i64, _>("owner_id") == account_id,
+                row.get::<String, _>("name") == name && row.get::<i64, _>("owner_id") == account_id,
                 "demo service ID {service_id} belongs to another record"
             );
         }
@@ -346,6 +382,7 @@ async fn seed(pool: &PgPool) -> Result<()> {
 async fn emit(pool: &PgPool, customer: i64, phase: i64) -> Result<()> {
     let account_id = ACCOUNT_BASE - customer - 1;
     let service_id = SERVICE_BASE - customer * SERVICES_PER_CUSTOMER - 1;
+    let profile = customer.rem_euclid(3);
     let mut tx = pool.begin().await?;
     // The event log triggers capture each change; this transaction makes each
     // demo step visible to Risk Score as one consistent state.
@@ -355,13 +392,17 @@ async fn emit(pool: &PgPool, customer: i64, phase: i64) -> Result<()> {
                 .bind(account_id).execute(&mut *tx).await?;
             sqlx::query("UPDATE public.services SET \"autoProlong\" = true, status = 'active', \"expiresAt\" = now() + interval '14 days' WHERE \"ownerId\" = $1")
                 .bind(account_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE public.services SET price = 800 WHERE id = $1")
+                .bind(service_id)
+                .execute(&mut *tx)
+                .await?;
         }
         1 => {
             sqlx::query("UPDATE public.services SET \"autoProlong\" = $2, \"expiresAt\" = now() + interval '2 days' WHERE id = $1")
-                .bind(service_id).bind(customer == 1).execute(&mut *tx).await?;
+                .bind(service_id).bind(profile == 1).execute(&mut *tx).await?;
         }
         2 => {
-            if customer != 0 {
+            if profile != 0 {
                 sqlx::query("UPDATE public.accounts SET balance = 300 WHERE id = $1")
                     .bind(account_id)
                     .execute(&mut *tx)
@@ -374,27 +415,35 @@ async fn emit(pool: &PgPool, customer: i64, phase: i64) -> Result<()> {
                 }
             }
             sqlx::query("UPDATE public.services SET \"autoProlong\" = $2, \"expiresAt\" = now() + interval '1 day' WHERE \"ownerId\" = $1")
-                .bind(account_id).bind(customer == 1).execute(&mut *tx).await?;
+                .bind(account_id).bind(profile == 1).execute(&mut *tx).await?;
         }
         3 => {
-            if customer != 0 {
+            if profile != 0 {
                 sqlx::query("UPDATE public.services SET status = 'prolong_wait', \"expiresAt\" = now() - interval '1 day' WHERE id = $1")
                     .bind(service_id).execute(&mut *tx).await?;
             }
-            if customer == 2 {
+            if profile == 2 {
                 sqlx::query("INSERT INTO public.transactions (amount, status, \"createdAt\", type, \"serviceId\") VALUES (800, 'not_performed', now(), 'prolong', $1)")
                     .bind(service_id).execute(&mut *tx).await?;
             }
         }
         4 => {
             sqlx::query("UPDATE public.accounts SET balance = $2, \"totalReplenished\" = \"totalReplenished\" + GREATEST(3000 - balance, 0) WHERE id = $1")
-                .bind(account_id).bind(if customer == 0 { 3000 } else { 2200 }).execute(&mut *tx).await?;
+                .bind(account_id).bind(if profile == 0 { 3000 } else { 2200 }).execute(&mut *tx).await?;
             sqlx::query("UPDATE public.services SET status = 'active', \"autoProlong\" = true, \"expiresAt\" = now() + interval '30 days' WHERE \"ownerId\" = $1")
                 .bind(account_id).execute(&mut *tx).await?;
-            if customer != 0 {
+            if profile != 0 {
                 sqlx::query("INSERT INTO public.transactions (amount, status, \"createdAt\", \"performedAt\", type, \"serviceId\") VALUES (800, 'performed', now(), now(), 'prolong', $1)")
                     .bind(service_id).execute(&mut *tx).await?;
             }
+        }
+        5 => {
+            // A synthetic price change is logged by the ordinary service trigger.
+            // Real price-risk metrics deliberately exclude negative fixture IDs.
+            sqlx::query("UPDATE public.services SET price = price + 100 WHERE id = $1")
+                .bind(service_id)
+                .execute(&mut *tx)
+                .await?;
         }
         _ => anyhow::bail!("invalid demo phase"),
     }
@@ -404,9 +453,57 @@ async fn emit(pool: &PgPool, customer: i64, phase: i64) -> Result<()> {
     Ok(())
 }
 
+/// Stagger each client's six-step demo cycle so the snapshot always contains
+/// healthy, warning, and high-risk profiles instead of changing every client
+/// through the same state at once.
+fn stream_phase(position: i64, customer: i64, customers: i64) -> i64 {
+    (position.div_euclid(customers) + customer).rem_euclid(6)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batched_ticks_visit_every_client_with_staggered_phases() {
+        let customers: i64 = 120;
+        let batch_size: i64 = 12;
+        let first_cycle: Vec<_> = (0..10)
+            .flat_map(|slot| {
+                (0..batch_size).map(move |offset| {
+                    let position = slot * batch_size + offset;
+                    let customer = position.rem_euclid(customers);
+                    (customer, stream_phase(position, customer, customers))
+                })
+            })
+            .collect();
+        assert_eq!(first_cycle.len(), customers as usize);
+        for customer in 0..customers {
+            assert_eq!(
+                first_cycle.iter().filter(|(id, _)| *id == customer).count(),
+                1
+            );
+        }
+        let mut phases = [0; 6];
+        for (customer, phase) in &first_cycle {
+            assert_eq!(*phase, customer.rem_euclid(6));
+            phases[*phase as usize] += 1;
+        }
+        assert!(phases.iter().all(|count| *count == customers as usize / 6));
+        for position in customers..customers * 2 {
+            let customer = position.rem_euclid(customers);
+            assert_eq!(
+                stream_phase(position, customer, customers),
+                (customer + 1).rem_euclid(6)
+            );
+        }
+        for profile in 0..3 {
+            assert_eq!(
+                replay_features(50, profile, true),
+                replay_features(50, profile + 3, true)
+            );
+        }
+    }
 
     #[test]
     fn replay_score_tracks_stress_and_saved_weights() {
@@ -420,5 +517,24 @@ mod tests {
             76
         );
         assert!(!replay_features(50, 2, true).contains_key("failed_prolong_share"));
+    }
+
+    #[test]
+    fn synthetic_replay_is_marked_without_changing_historical_facts() {
+        let historical_facts = serde_json::json!({
+            "is_confident": true,
+            "is_unusual": true,
+            "anomaly_score": 4.2,
+            "observations": 120
+        });
+        let marked = mark_synthetic_replay(historical_facts.clone(), 87);
+
+        assert_eq!(marked["synthetic_replay"], true);
+        assert_eq!(marked["snapshot_risk_score"], 87);
+        assert_eq!(marked["is_confident"], historical_facts["is_confident"]);
+        assert_eq!(marked["is_unusual"], historical_facts["is_unusual"]);
+        assert_eq!(marked["anomaly_score"], historical_facts["anomaly_score"]);
+        assert_eq!(marked["observations"], historical_facts["observations"]);
+        assert!(historical_facts.get("synthetic_replay").is_none());
     }
 }

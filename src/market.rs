@@ -903,7 +903,103 @@ fn excerpt(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_html;
+    use super::{parse_cdx_json, parse_html};
+
+    #[test]
+    fn timeweb_selectel_and_hetzner_extract_prices_and_core_specs() {
+        let timeweb = parse_html(
+            "timeweb_cloud",
+            r#"<div class="row--plan"><div class="titleWrapper"><span>MSK Cloud S</span></div>
+              <h5>1 200 ₽ / месяц</h5><div class="wFixed">2 vCPU</div>
+              <div class="wFixed">8 GB RAM</div><div class="wFixed">50 GB SSD</div>
+              <span>Трафик: 5 ТБ</span></div>"#,
+        );
+        assert_eq!(timeweb.len(), 1);
+        assert!(timeweb[0].is_complete());
+        assert_eq!(timeweb[0].price_minor, Some(120_000));
+        assert_eq!(timeweb[0].cpu_cores, Some(2));
+        assert_eq!(timeweb[0].ram_mib, Some(8192));
+        assert_eq!(timeweb[0].disk_gib, Some(50));
+        assert_eq!(timeweb[0].region.as_deref(), Some("Moscow"));
+        assert!(timeweb[0].raw_excerpt.contains("5 ТБ"));
+
+        let selectel = parse_html(
+            "selectel",
+            r#"<a class="custom-card"><h5>VDS Standard</h5>
+              <table><tr><td>vCPU</td><td>4 cores</td></tr>
+              <tr><td>RAM</td><td>16 GB</td></tr><tr><td>Диск</td><td>80 GB SSD</td></tr></table>
+              <div class="custom-card__price">2 450 ₽ / month</div></a>"#,
+        );
+        assert_eq!(selectel.len(), 1);
+        assert!(selectel[0].is_complete());
+        assert_eq!(selectel[0].price_minor, Some(245_000));
+        assert_eq!(selectel[0].ram_mib, Some(16_384));
+        assert!(selectel[0].raw_excerpt.contains("80 GB SSD"));
+
+        let hetzner = parse_html(
+            "hetzner",
+            r#"<div class="cloud-matrix-product"><span class="name-cell">CX22</span>
+              <span class="cpu-cell">2 vCPU</span><span class="ram-cell">4 GB RAM</span>
+              <span class="drive-cell">40 GB NVMe SSD</span>
+              <div class="month-price-cell">from <span class="visually-hidden">€ 3.79</span></div>
+            </div>"#,
+        );
+        assert_eq!(hetzner.len(), 1);
+        assert!(hetzner[0].is_complete());
+        assert_eq!(hetzner[0].price_minor, Some(379));
+        assert_eq!(hetzner[0].disk_type.as_deref(), Some("NVMe"));
+        assert_eq!(hetzner[0].price_kind, "starting_from");
+    }
+
+    #[test]
+    fn parser_rejects_changed_or_incomplete_html_and_deduplicates_repeated_cards() {
+        assert!(parse_html("firstvds", "<main>new markup without tariffs</main>").is_empty());
+        let no_price = parse_html(
+            "contabo",
+            r#"<table><tr><th>Model</th><th>CPU</th><th>RAM</th><th>Storage</th><th>Price</th></tr>
+              <tr><td>Cloud VPS 4</td><td>4 vCPU</td><td>8 GB</td><td>100 GB SSD</td><td>price unavailable</td></tr></table>"#,
+        );
+        assert!(
+            no_price.is_empty(),
+            "malformed prices are not persisted as offers"
+        );
+
+        let repeated = r#"<table><tr><th>Model</th><th>CPU</th><th>RAM</th><th>Storage</th><th>Price Including VAT</th></tr>
+          <tr><td>Cloud VPS 4</td><td>4 vCPU Cores</td><td>8 GB RAM</td><td>100 GB SSD</td><td>$ 5.28 / month</td></tr>
+          <tr><td>Cloud VPS 4</td><td>4 vCPU Cores</td><td>8 GB RAM</td><td>100 GB SSD</td><td>$ 5.28 / month</td></tr></table>"#;
+        let offers = parse_html("contabo", repeated);
+        assert_eq!(
+            offers.len(),
+            1,
+            "same capture and price do not duplicate an offer"
+        );
+    }
+
+    #[test]
+    fn cdx_parser_handles_column_order_and_rejects_malformed_archive_rows() {
+        let captures = parse_cdx_json(
+            r#"[["digest","original","timestamp"],["sha-a","https://example.test/vps","20261024010203"],["sha-b","javascript:alert(1)","20261024010203"]]"#,
+        )
+        .unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].digest, "sha-a");
+        assert_eq!(
+            captures[0].replay_url(),
+            "https://web.archive.org/web/20261024010203id_/https://example.test/vps"
+        );
+        assert!(parse_cdx_json("[]").unwrap().is_empty());
+        assert!(
+            parse_cdx_json(r#"[["original","digest"],["https://example.test","sha"]]"#)
+                .unwrap_err()
+                .contains("timestamp")
+        );
+        assert!(
+            parse_cdx_json(
+                r#"[["timestamp","original","digest"],["not-a-date","https://example.test","sha"]]"#
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn firstvds_persists_additional_tariff_rows_with_the_offer() {

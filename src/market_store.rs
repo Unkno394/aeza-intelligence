@@ -262,6 +262,84 @@ fn matching_clause<'a>(text: &'a str, needles: &[&str]) -> Option<&'a str> {
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{
+        matching_clause, normalize_disk_type, normalize_offer, normalize_region, traffic_gib,
+    };
+    use crate::market::Offer;
+
+    fn offer(raw_excerpt: &str) -> Offer {
+        Offer {
+            plan_key: "plan".into(),
+            plan_name: "Plan".into(),
+            cpu_cores: Some(4),
+            ram_mib: Some(8192),
+            disk_gib: Some(100),
+            disk_type: Some("nvme ssd".into()),
+            region: Some("Frankfurt".into()),
+            price_minor: Some(1234),
+            currency: Some("EUR".into()),
+            billing_period: Some("month".into()),
+            price_kind: "regular".into(),
+            vat_included: Some(true),
+            raw_excerpt: raw_excerpt.into(),
+        }
+    }
+
+    #[test]
+    fn normalized_details_preserve_source_terms_without_inventing_unknown_values() {
+        let normalized = normalize_offer(&offer(
+            "4 vCPU; 8 GB RAM; 100 GB NVMe SSD; Traffic: 5 TB; 20% discount; fair use limit applies",
+        ));
+        assert_eq!(normalized.disk_type.as_deref(), Some("NVMe"));
+        assert_eq!(normalized.region.as_deref(), Some("DE-FRA"));
+        let traffic = matching_clause(&normalized.raw_excerpt, &["traffic"]).unwrap();
+        assert_eq!(traffic_gib(traffic), Some(5120));
+        assert_eq!(
+            matching_clause(&normalized.raw_excerpt, &["discount", "promo", "sale"]),
+            Some("20% discount")
+        );
+        assert_eq!(
+            matching_clause(&normalized.raw_excerpt, &["limit", "fair use"]),
+            Some("fair use limit applies")
+        );
+
+        let unknown = Offer {
+            disk_type: None,
+            region: None,
+            cpu_cores: None,
+            ram_mib: None,
+            disk_gib: None,
+            price_minor: None,
+            currency: None,
+            billing_period: None,
+            vat_included: None,
+            ..offer("Specifications not published")
+        };
+        let normalized = normalize_offer(&unknown);
+        assert!(normalized.cpu_cores.is_none());
+        assert!(normalized.ram_mib.is_none());
+        assert!(normalized.disk_gib.is_none());
+        assert!(normalized.price_minor.is_none());
+        assert!(normalized.region.is_none());
+        assert!(normalized.disk_type.is_none());
+    }
+
+    #[test]
+    fn traffic_and_location_normalization_handles_bounds_and_unlimited_terms() {
+        assert_eq!(traffic_gib("Traffic: 25 GB"), Some(25));
+        assert_eq!(traffic_gib("Traffic: 2 TB"), Some(2048));
+        assert_eq!(traffic_gib("Unlimited traffic"), None);
+        assert_eq!(traffic_gib("Traffic: 999999999999 TB"), None);
+        assert_eq!(normalize_disk_type("enterprise NVMe SSD"), "NVMe");
+        assert_eq!(normalize_disk_type("SATA SSD"), "SSD");
+        assert_eq!(normalize_disk_type("HDD"), "HDD");
+        assert_eq!(normalize_region("Москва"), "RU-MOW");
+        assert_eq!(normalize_region("an unlisted region"), "an unlisted region");
+    }
+}
+
 pub async fn count_observations(pool: &PgPool, provider_code: &str) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
         r#"SELECT count(*)

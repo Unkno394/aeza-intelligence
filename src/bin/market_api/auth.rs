@@ -130,21 +130,43 @@ impl Auth {
     pub async fn new(args: AuthArgs) -> Result<Arc<Self>> {
         if args.auth_disabled {
             eprintln!("WARNING: authentication is disabled, every request acts as superadmin");
-            return Ok(Arc::new(Self { oidc: None, local: None }));
+            return Ok(Arc::new(Self {
+                oidc: None,
+                local: None,
+            }));
         }
-        let local = if let (Some(user), Some(password)) = (args.local_admin_user.as_ref(), args.local_admin_password.as_ref()) {
-            anyhow::ensure!(!user.is_empty() && password.len() >= 16, "LOCAL_ADMIN_USER is required and LOCAL_ADMIN_PASSWORD must be at least 16 characters");
-            anyhow::ensure!((1..=720).contains(&args.session_hours), "SESSION_HOURS must be between 1 and 720");
+        let local = if let (Some(user), Some(password)) = (
+            args.local_admin_user.as_ref(),
+            args.local_admin_password.as_ref(),
+        ) {
+            anyhow::ensure!(
+                !user.is_empty() && password.len() >= 16,
+                "LOCAL_ADMIN_USER is required and LOCAL_ADMIN_PASSWORD must be at least 16 characters"
+            );
+            anyhow::ensure!(
+                (1..=720).contains(&args.session_hours),
+                "SESSION_HOURS must be between 1 and 720"
+            );
             Some(Local {
-                    user: user.clone(),
-                    password: password.clone(),
-                    origin: args.public_url.as_deref().unwrap_or_default().trim_end_matches('/').to_owned(),
-                    session_hours: args.session_hours,
-                    sessions: Mutex::new(HashMap::new()),
-                })
-        } else { None };
+                user: user.clone(),
+                password: password.clone(),
+                origin: args
+                    .public_url
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim_end_matches('/')
+                    .to_owned(),
+                session_hours: args.session_hours,
+                sessions: Mutex::new(HashMap::new()),
+            })
+        } else {
+            None
+        };
         if args.oidc_issuer.as_deref().is_none_or(str::is_empty) {
-            anyhow::ensure!(local.is_some(), "OIDC_ISSUER or LOCAL_ADMIN_USER/LOCAL_ADMIN_PASSWORD is required");
+            anyhow::ensure!(
+                local.is_some(),
+                "OIDC_ISSUER or LOCAL_ADMIN_USER/LOCAL_ADMIN_PASSWORD is required"
+            );
             return Ok(Arc::new(Self { oidc: None, local }));
         }
         let required = |value: Option<String>, name: &str| {
@@ -221,7 +243,12 @@ impl Auth {
                 sessions.retain(|_, expires| *expires > Instant::now());
                 if sessions.contains_key(token) {
                     return Ok(Some(Session {
-                        admin: Admin { id: 0, email: local.user.clone(), name: "Local admin".into(), role: "superadmin".into() },
+                        admin: Admin {
+                            id: 0,
+                            email: local.user.clone(),
+                            name: "Local admin".into(),
+                            role: "superadmin".into(),
+                        },
                         token: Some(token.to_owned()),
                     }));
                 }
@@ -252,7 +279,15 @@ impl Auth {
     pub async fn is_live(&self, pool: &PgPool, session: &Session) -> bool {
         if let Some(local) = &self.local {
             if let Some(token) = &session.token {
-                if local.sessions.lock().await.get(token).is_some_and(|expires| *expires > Instant::now()) { return true; }
+                if local
+                    .sessions
+                    .lock()
+                    .await
+                    .get(token)
+                    .is_some_and(|expires| *expires > Instant::now())
+                {
+                    return true;
+                }
             }
         }
         match &session.token {
@@ -264,8 +299,12 @@ impl Auth {
     /// Cross-site WebSocket and state-changing requests must come from PUBLIC_URL.
     fn origin_allowed(&self, method: &Method, headers: &HeaderMap) -> bool {
         if let Some(local) = &self.local {
-            if method == Method::GET && !headers.contains_key(header::UPGRADE) { return true; }
-            return headers.get(header::ORIGIN).is_none_or(|origin| origin.as_bytes() == local.origin.as_bytes());
+            if method == Method::GET && !headers.contains_key(header::UPGRADE) {
+                return true;
+            }
+            return headers
+                .get(header::ORIGIN)
+                .is_none_or(|origin| origin.as_bytes() == local.origin.as_bytes());
         }
         let Some(oidc) = &self.oidc else {
             return true;
@@ -282,7 +321,9 @@ impl Auth {
     }
 
     fn secure(&self) -> bool {
-        if let Some(local) = &self.local { return local.origin.starts_with("https://"); }
+        if let Some(local) = &self.local {
+            return local.origin.starts_with("https://");
+        }
         self.oidc
             .as_ref()
             .is_some_and(|oidc| oidc.origin.starts_with("https://"))
@@ -442,24 +483,51 @@ pub async fn login(State(auth): State<Arc<Auth>>, Query(query): Query<LoginQuery
 }
 
 #[derive(Deserialize)]
-pub struct LocalCredentials { username: String, password: String }
+pub struct LocalCredentials {
+    username: String,
+    password: String,
+}
 
-pub async fn local_login(State(auth): State<Arc<Auth>>, headers: HeaderMap, Json(credentials): Json<LocalCredentials>) -> Response {
-    let Some(local) = &auth.local else { return StatusCode::NOT_FOUND.into_response(); };
-    if !auth.origin_allowed(&Method::POST, &headers) { return StatusCode::FORBIDDEN.into_response(); }
+pub async fn local_login(
+    State(auth): State<Arc<Auth>>,
+    headers: HeaderMap,
+    Json(credentials): Json<LocalCredentials>,
+) -> Response {
+    let Some(local) = &auth.local else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !auth.origin_allowed(&Method::POST, &headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let expected = Sha256::digest(local.password.as_bytes());
     let supplied = Sha256::digest(credentials.password.as_bytes());
     let mut difference = 0u8;
-    for (a, b) in expected.iter().zip(supplied.iter()) { difference |= a ^ b; }
+    for (a, b) in expected.iter().zip(supplied.iter()) {
+        difference |= a ^ b;
+    }
     if credentials.username != local.user || difference != 0 {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"invalid_credentials"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"invalid_credentials"})),
+        )
+            .into_response();
     }
     let token = CsrfToken::new_random_len(32).secret().clone();
     let lifetime = i64::from(local.session_hours) * 3600;
     let mut sessions = local.sessions.lock().await;
     sessions.retain(|_, expires| *expires > Instant::now());
-    sessions.insert(token.clone(), Instant::now() + Duration::from_secs(lifetime as u64));
-    (AppendHeaders([(header::SET_COOKIE, auth.set_cookie(SESSION_COOKIE, &token, "/", lifetime))]), StatusCode::NO_CONTENT).into_response()
+    sessions.insert(
+        token.clone(),
+        Instant::now() + Duration::from_secs(lifetime as u64),
+    );
+    (
+        AppendHeaders([(
+            header::SET_COOKIE,
+            auth.set_cookie(SESSION_COOKIE, &token, "/", lifetime),
+        )]),
+        StatusCode::NO_CONTENT,
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -515,9 +583,7 @@ pub async fn callback(
         }
         // A stale callback (e.g. from a tab whose login another tab already
         // finished) is harmless when this browser is signed in by now.
-        Err(LoginError::Expired)
-            if matches!(auth.session(&pool, &headers).await, Ok(Some(_))) =>
-        {
+        Err(LoginError::Expired) if matches!(auth.session(&pool, &headers).await, Ok(Some(_))) => {
             (AppendHeaders(cookies), Redirect::to("/")).into_response()
         }
         Err(error) => (
@@ -623,10 +689,19 @@ pub async fn logout(
     headers: HeaderMap,
 ) -> Response {
     if let Some(local) = &auth.local {
-        if !auth.origin_allowed(&Method::POST, &headers) { return StatusCode::FORBIDDEN.into_response(); }
+        if !auth.origin_allowed(&Method::POST, &headers) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
         if let Some(token) = cookie(&headers, SESSION_COOKIE) {
             if local.sessions.lock().await.remove(token).is_some() {
-                return (AppendHeaders([(header::SET_COOKIE, auth.set_cookie(SESSION_COOKIE, "", "/", 0))]), Json(LogoutResponse { logout_url: None })).into_response();
+                return (
+                    AppendHeaders([(
+                        header::SET_COOKIE,
+                        auth.set_cookie(SESSION_COOKIE, "", "/", 0),
+                    )]),
+                    Json(LogoutResponse { logout_url: None }),
+                )
+                    .into_response();
             }
         }
     }
@@ -688,6 +763,32 @@ mod tests {
         assert_eq!(cookie(&headers, SESSION_COOKIE), Some("tok"));
         assert_eq!(cookie(&headers, &login_cookie("st")), Some("1"));
         assert_eq!(cookie(&headers, "missing"), None);
+    }
+
+    #[test]
+    fn session_cookie_flags_follow_the_public_origin_scheme() {
+        let auth = |origin: &str| Auth {
+            oidc: None,
+            local: Some(Local {
+                user: "operator@example.test".into(),
+                password: "test-password".into(),
+                origin: origin.into(),
+                session_hours: 12,
+                sessions: Mutex::new(HashMap::new()),
+            }),
+        };
+
+        let http_cookie =
+            auth("http://localhost:8080").set_cookie(SESSION_COOKIE, "token", "/", 3600);
+        assert!(http_cookie.contains("HttpOnly"));
+        assert!(http_cookie.contains("SameSite=Lax"));
+        assert!(!http_cookie.contains("Secure"));
+
+        let https_cookie =
+            auth("https://app.example.test").set_cookie(SESSION_COOKIE, "token", "/", 3600);
+        assert!(https_cookie.contains("HttpOnly"));
+        assert!(https_cookie.contains("SameSite=Lax"));
+        assert!(https_cookie.contains("; Secure"));
     }
 
     #[test]

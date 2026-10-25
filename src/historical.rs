@@ -532,7 +532,9 @@ impl HistoricalModel {
         metrics: &BTreeMap<String, f64>,
         event: Option<BehaviorEvent<'_>>,
     ) -> HistoricalAssessment {
-        let familiarity = self.familiarity();
+        // Use the incoming snapshot's timestamp for the history-span threshold,
+        // while leaving its values out of the baseline used to score itself.
+        let familiarity = self.familiarity_at(timestamp);
         let mut metric_deviations = BTreeMap::new();
         let mut anomaly_score: Option<f64> = None;
 
@@ -1046,6 +1048,10 @@ impl HistoricalModel {
     }
 
     pub fn familiarity(&self) -> f64 {
+        self.familiarity_at(self.last_timestamp.unwrap_or_default())
+    }
+
+    fn familiarity_at(&self, timestamp: Timestamp) -> f64 {
         if self.observation_count == 0 {
             return 0.0;
         }
@@ -1054,8 +1060,8 @@ impl HistoricalModel {
         } else {
             (self.observation_count as f64 / self.config.minimum_observations as f64).min(1.0)
         };
-        let duration_ms = match (self.first_timestamp, self.last_timestamp) {
-            (Some(first), Some(last)) => last.saturating_sub(first).max(0),
+        let duration_ms = match self.first_timestamp {
+            Some(first) => timestamp.saturating_sub(first).max(0),
             _ => 0,
         };
         let duration_factor = if self.config.minimum_history_ms <= 0 {

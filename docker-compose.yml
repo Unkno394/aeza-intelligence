@@ -8,7 +8,7 @@
 # DATABASE_URL points to the existing PostgreSQL on the Linux host.
 # Search interest is collected only when TRENDSMCP_API_KEY is set.
 
-name: aeza-intelligence
+name: ${COMPOSE_PROJECT_NAME:-aeza-intelligence}
 
 x-database-url: &database-url ${DATABASE_URL:?Set DATABASE_URL in .env}
 
@@ -24,17 +24,35 @@ x-app: &app
 
 services:
   keycloak:
-    image: quay.io/keycloak/keycloak:26.8.1
-    network_mode: host
-    command: ["start-dev", "--http-port=8081", "--hostname=http://127.0.0.1:8081", "--import-realm"]
+    image: quay.io/keycloak/keycloak:26.0.7
+    network_mode: bridge
+    command: ["start-dev", "--import-realm", "--http-port=8080", "--health-enabled=true"]
+    ports:
+      - "127.0.0.1:${KEYCLOAK_PORT:-5556}:8080"
     environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
-      SSO_USER_PASSWORD: ${SSO_USER_PASSWORD:?Set SSO_USER_PASSWORD in .env}
+      KC_AEZA_PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:${FRONTEND_PORT:-8080}}
+      KC_AEZA_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-dev-secret}
+      KC_SPI_THEME_STATIC_MAX_AGE: "-1"
+      KC_SPI_THEME_CACHE_THEMES: "false"
+      KC_SPI_THEME_CACHE_TEMPLATES: "false"
     volumes:
-      - keycloak-data:/opt/keycloak/data
-      - ./keycloak/aeza-realm.json:/opt/keycloak/data/import/aeza-realm.json:ro
+      - keycloak-dev-auth-data:/opt/keycloak/data
+      - ./dev/keycloak/aeza-realm.json:/opt/keycloak/data/import/aeza-realm.json:ro
+      - ./keycloak/themes:/opt/keycloak/themes:ro
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"UP"' <&3
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
 
   migrate:
     <<: *app
@@ -44,6 +62,7 @@ services:
 
   seed:
     <<: *app
+    profiles: ["demo"]
     command: ["load", "--skip-if-loaded", "/data/data.json"]
     volumes:
       - ./scripts:/data:ro
@@ -57,9 +76,9 @@ services:
     # AUTH_DISABLED=true.
     environment:
       DATABASE_URL: *database-url
-      OIDC_ISSUER: ${OIDC_ISSUER:-http://127.0.0.1:8081/realms/aeza}
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://127.0.0.1:${KEYCLOAK_PORT:-5556}/realms/aeza}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-aeza-intelligence}
-      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-${KEYCLOAK_CLIENT_SECRET:-dev-secret}}
       OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
       PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:${FRONTEND_PORT:-8080}}
       SESSION_HOURS: ${SESSION_HOURS:-12}
@@ -68,7 +87,7 @@ services:
       LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-}
     depends_on:
       keycloak:
-        condition: service_started
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
 
@@ -78,7 +97,7 @@ services:
     entrypoint: ["client_snapshot"]
     command: ["--schedule"]
     depends_on:
-      seed:
+      migrate:
         condition: service_completed_successfully
 
   demo-stream:
@@ -89,8 +108,10 @@ services:
     environment:
       DATABASE_URL: *database-url
       DEMO_STREAM_INTERVAL_SECONDS: ${DEMO_STREAM_INTERVAL_SECONDS:-15}
-      DEMO_REPLAY_DAYS: ${DEMO_REPLAY_DAYS:-60}
-      DEMO_REPLAY_DELAY_MS: ${DEMO_REPLAY_DELAY_MS:-200}
+      DEMO_STREAM_CUSTOMERS: ${DEMO_STREAM_CUSTOMERS:-500}
+      DEMO_STREAM_BATCH_SIZE: ${DEMO_STREAM_BATCH_SIZE:-50}
+      DEMO_REPLAY_DAYS: ${DEMO_REPLAY_DAYS:-120}
+      DEMO_REPLAY_DELAY_MS: ${DEMO_REPLAY_DELAY_MS:-0}
     depends_on:
       seed:
         condition: service_completed_successfully
@@ -146,3 +167,4 @@ services:
 
 volumes:
   keycloak-data:
+  keycloak-dev-auth-data:

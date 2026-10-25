@@ -2,9 +2,14 @@
   "realm": "aeza",
   "enabled": true,
   "displayName": "Aéza Intelligence",
+  "loginTheme": "aeza",
+  "internationalizationEnabled": true,
+  "defaultLocale": "ru",
+  "supportedLocales": ["ru", "en"],
   "loginWithEmailAllowed": true,
   "registrationAllowed": false,
   "resetPasswordAllowed": false,
+  "bruteForceProtected": true,
   "clients": [
     {
       "clientId": "aeza-intelligence",

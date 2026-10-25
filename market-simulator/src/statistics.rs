@@ -1,5 +1,5 @@
 //! Seed uncertainty aggregation. Every point comes from the unchanged simulation engine.
-use crate::{hash, money, simulate, Plan, Scenario, Sensitivity, VERSION};
+use crate::{Plan, Scenario, Sensitivity, VERSION, hash, money, simulate};
 use serde::{Deserialize, Serialize};
 pub const SEED_COUNT: usize = 100;
 #[derive(Deserialize)]
@@ -172,29 +172,64 @@ pub fn analyze(s: Scenario, market: Vec<Plan>) -> Result<Statistics, String> {
             let value = signed_money(exact);
             seed_profit.push(value);
             profits[i].push(value);
-            let segments=s.segments.iter().enumerate().map(|(segment_index,segment)|{
-                let rows:Vec<_>=run.months.iter().flat_map(|month|&month.buyer_behavior).filter(|row|row.segment_index==segment_index).collect();
-                let final_active=run.months.last().unwrap().buyer_behavior.iter().find(|row|row.segment_index==segment_index).map_or(0,|row|row.aeza_active);
-                SegmentPoint{
-                    segment_index,
-                    segment:segment.name.clone(),
-                    modeled_decisions:rows.iter().map(|row|row.decisions).sum(),
-                    purchases:rows.iter().map(|row|row.first_leases+row.market_returns+row.switches_in).sum(),
-                    renewals:rows.iter().map(|row|row.renewals).sum(),
-                    loss_events:rows.iter().map(|row|row.switches_out+row.exogenous_exits+row.choice_exits).sum(),
-                    final_active,
-                    revenue_rub:rows.iter().map(|row|row.aeza_revenue_rub).sum(),
-                }
-            }).collect();
+            let segments = s
+                .segments
+                .iter()
+                .enumerate()
+                .map(|(segment_index, segment)| {
+                    let rows: Vec<_> = run
+                        .months
+                        .iter()
+                        .flat_map(|month| &month.buyer_behavior)
+                        .filter(|row| row.segment_index == segment_index)
+                        .collect();
+                    let final_active = run
+                        .months
+                        .last()
+                        .unwrap()
+                        .buyer_behavior
+                        .iter()
+                        .find(|row| row.segment_index == segment_index)
+                        .map_or(0, |row| row.aeza_active);
+                    SegmentPoint {
+                        segment_index,
+                        segment: segment.name.clone(),
+                        modeled_decisions: rows.iter().map(|row| row.decisions).sum(),
+                        purchases: rows
+                            .iter()
+                            .map(|row| row.first_leases + row.market_returns + row.switches_in)
+                            .sum(),
+                        renewals: rows.iter().map(|row| row.renewals).sum(),
+                        loss_events: rows
+                            .iter()
+                            .map(|row| row.switches_out + row.exogenous_exits + row.choice_exits)
+                            .sum(),
+                        final_active,
+                        revenue_rub: rows.iter().map(|row| row.aeza_revenue_rub).sum(),
+                    }
+                })
+                .collect();
             points[i].push(Point {
                 seed,
                 profit_rub: money::float(value),
                 exact_profit_rub: exact.clone(),
                 revenue_rub: run.aeza_total_revenue_usd,
                 final_active: run.months.last().unwrap().providers["aeza"].active_leases,
-                renewal_events: run.months.iter().map(|m| m.providers["aeza"].renewals).sum(),
-                competitor_switch_out_events: run.months.iter().map(|m| m.providers["aeza"].switches_out).sum(),
-                outside_churn_events: run.months.iter().map(|m| m.providers["aeza"].churn_to_outside).sum(),
+                renewal_events: run
+                    .months
+                    .iter()
+                    .map(|m| m.providers["aeza"].renewals)
+                    .sum(),
+                competitor_switch_out_events: run
+                    .months
+                    .iter()
+                    .map(|m| m.providers["aeza"].switches_out)
+                    .sum(),
+                outside_churn_events: run
+                    .months
+                    .iter()
+                    .map(|m| m.providers["aeza"].churn_to_outside)
+                    .sum(),
                 loss_events: run
                     .months
                     .iter()
@@ -365,14 +400,16 @@ mod tests {
         let mut s =
             crate::currency::scenario_to_rub(crate::example(), &crate::market_data::bundled_fx());
         s.buyers_per_month = 500;
-        assert!(prepare(
-            Request {
-                scenario: s,
-                sensitivity: Sensitivity::Medium
-            },
-            &crate::catalog()
-        )
-        .unwrap_err()
-        .contains("100-seed batch"));
+        assert!(
+            prepare(
+                Request {
+                    scenario: s,
+                    sensitivity: Sensitivity::Medium
+                },
+                &crate::catalog()
+            )
+            .unwrap_err()
+            .contains("100-seed batch")
+        );
     }
 }

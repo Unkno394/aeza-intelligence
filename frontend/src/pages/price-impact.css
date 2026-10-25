@@ -1,0 +1,50 @@
+.price-impact-page{display:grid;gap:18px}
+.price-impact-page .page-heading{margin-bottom:0}
+.price-impact-mode{display:inline-flex;width:max-content;max-width:100%;gap:4px;padding:4px;border:1px solid #8bc8eb36;border-radius:11px;background:#061a2c}
+.price-impact-mode button{padding:9px 14px;border:0;border-radius:8px;background:transparent;color:#a9c4d5;font-size:14px;cursor:pointer}
+.price-impact-mode button.active{background:#1f78b5;color:#fff;box-shadow:0 2px 12px #0076c744}
+.price-impact-intro{display:flex;align-items:flex-start;gap:11px;padding:16px 18px;border:1px solid #8dcfff35;border-radius:12px;background:#9bdfff0b;color:#b9d2e5;font-size:15px;line-height:1.65}
+.price-impact-intro svg{flex:none;color:#8bd5ff;margin-top:2px}
+.price-impact-demo-note{padding:12px 15px;border:1px solid #e8bb7850;border-radius:10px;background:#c7944615;color:#e8ca9e;font-size:14px;line-height:1.55}
+.price-impact-demo-label{color:#e8ca9e;font-size:14px;white-space:nowrap}
+.price-impact-error{padding:14px 16px;border:1px solid #e98d9b66;border-radius:10px;background:#e98d9b12;color:#ffd6dc}
+.price-impact-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.price-impact-summary>div{display:flex;min-width:0;flex-direction:column;gap:7px;padding:18px;border:1px solid #8bc8eb36;border-radius:12px;background:linear-gradient(145deg,#12324bd9,#0a2035e8)}
+.price-impact-summary small,.price-impact-summary span{color:#a5bfd1;font-size:14px;line-height:1.5}
+.price-impact-summary strong{color:#eaf7ff;font-size:25px;line-height:1.2;overflow-wrap:anywhere}
+.price-impact-method{margin:0;color:#a9c4d5;font-size:14px;line-height:1.7}
+.price-impact-page .panel{margin:0;background:linear-gradient(135deg,#09243bd9,#0b2740c9 52%,#081f36d9);border-color:#52a5db55}
+.price-impact-page .panel-heading{padding-bottom:14px}
+.price-impact-page .panel-heading h2{color:#eff8ff;font-size:17px}
+.price-impact-page .panel-heading p{color:#b4cede;font-size:14px}
+.price-impact-page .panel-heading svg{color:#a5d8ff}
+.price-impact-empty{padding:22px;color:#a9c4d5;font-size:15px}
+.price-impact-review-list{display:grid;gap:9px;padding:0 20px 18px}
+.price-impact-review-list>div{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 15px;border:1px solid #8bc8eb24;border-radius:10px;background:#a7dfff08}
+.price-impact-review-list strong,.price-impact-review-list span{display:block;overflow-wrap:anywhere}
+.price-impact-review-list strong{font-size:15px;color:#e8f5ff}
+.price-impact-review-list span{margin-top:4px;font-size:14px;color:#a7c3d5}
+.price-impact-review-list a,.price-impact-table a{color:#9bdcff}
+.price-impact-review-list a{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-size:14px}
+.price-impact-page .panel>.price-impact-method{margin:0 20px 17px}
+.price-impact-filters{display:flex;flex-wrap:wrap;gap:14px;padding:0 20px 18px}
+.price-impact-filters label{display:flex;min-width:min(260px,100%);flex-direction:column;gap:7px;color:#aac5d6;font-size:14px}
+.price-impact-filters input{height:41px;border:1px solid #c5e6ff38;border-radius:9px;background:#061b2e;color:#e9f7ff;font-size:15px}
+.price-impact-page .table-scroll{margin:0 20px;border:1px solid #8bc8eb24;border-radius:10px}
+.price-impact-table{width:100%;border-collapse:collapse}
+.price-impact-table th,.price-impact-table td{padding:13px 15px;text-align:left;vertical-align:top;font-size:14px;line-height:1.5}
+.price-impact-table th{color:#9abbd0;font-weight:600;white-space:nowrap}
+.price-impact-table td{color:#d8e9f5;border-top:1px solid #8bc8eb1d}
+.price-impact-table td small,.price-impact-table td strong{display:block;margin-top:4px}
+.price-impact-table td small{color:#96b2c7;font-size:14px}
+.price-impact-table td strong{color:#acdfff}
+.price-impact-outcome{display:inline-block;padding:4px 7px;border-radius:7px;color:#aac4d4;background:#a7dfff12;white-space:nowrap}
+.price-impact-outcome.is-renewed{color:#8fdbb5;background:#36b68320}
+.price-impact-outcome.is-adverse{color:#ffbf9d;background:#e8936420}
+.price-impact-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px 18px;color:#a9c4d5;font-size:14px}
+.price-impact-pagination>div{display:flex;align-items:center;gap:10px}
+.price-impact-pagination button{display:grid;width:34px;height:34px;place-items:center;border:1px solid #8bc8eb36;border-radius:8px;color:#d1ebfb}
+.price-impact-pagination button:disabled{opacity:.45}
+@media(max-width:1000px){.price-impact-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.price-impact-summary{grid-template-columns:1fr}.price-impact-review-list>div{align-items:flex-start;flex-direction:column}.price-impact-pagination{align-items:flex-start;flex-direction:column}.price-impact-page .table-scroll{margin:0 12px}.price-impact-filters{padding-inline:12px}}
+.price-impact-intro button{margin-left:8px;padding:2px 0;color:#98dcff;text-decoration:underline;text-underline-offset:3px;font-size:inherit}

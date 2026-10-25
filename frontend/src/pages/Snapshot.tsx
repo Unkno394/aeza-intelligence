@@ -1,4 +1,4 @@
-import {useEffect,useRef,useState,type CSSProperties} from 'react';
+import {useEffect,useMemo,useRef,useState,type CSSProperties} from 'react';
 import {Link,useSearchParams} from 'react-router-dom';
 import {ArrowDown,ArrowUp,ArrowUpDown,ArrowUpRight,CalendarClock,CheckCircle2,ChevronDown,ChevronLeft,ChevronRight,CircleAlert,CreditCard,Info,Search,Server,Wallet} from 'lucide-react';
 import {useAnalyzer} from '../hooks/useAnalyzer';
@@ -7,6 +7,8 @@ import {Badge,Empty,Panel,colors} from '../components/common';
 import {AccountPicker} from '../components/ui/AccountPicker';
 import {GlassSelect} from '../components/ui/GlassSelect';
 import type {RiskResult,Service} from '../types';
+import {fetchPriceImpact,needsPriceReview,priceIncreasePercent,priceOutcome,type PriceImpactEvent} from '../features/priceImpact';
+import {demoEvidenceReady,demoPriceRisk} from '../features/demoPriceRisk';
 import './snapshot.css';
 
 type RustClientReport={accountId:number;values:(number|null)[];robustZ:number[];mahalanobis:number|null;neighbours:number[];neighbourDistance:number|null;peers:number[];conditionalZ:number[]};
@@ -28,12 +30,16 @@ const serviceFilterText=(service:Service)=>`${service.id} ${service.name} ${serv
 export default function Snapshot(){
  const {data,settings,risks,error:riskError}=useAnalyzer();
  const [params,setParams]=useSearchParams();
+ const syntheticMode=params.get('mode')==='synthetic';
  const [rustReport,setRustReport]=useState<RustReport|null>(null);
  const [rustError,setRustError]=useState('');
  const [ledger,setLedger]=useState<LedgerEntry[]>([]);
  const [ledgerError,setLedgerError]=useState('');
  const [cashflow,setCashflow]=useState<Cashflow|null>(null);
  const [cashflowError,setCashflowError]=useState('');
+ const [priceEvents,setPriceEvents]=useState<PriceImpactEvent[]>([]);
+ const [priceImpactError,setPriceImpactError]=useState('');
+ const [priceImpactLoading,setPriceImpactLoading]=useState(true);
  const [serviceSearch,setServiceSearch]=useState('');
  const [statusFilter,setStatusFilter]=useState<ServiceStatusFilter>('all');
  const [autoFilter,setAutoFilter]=useState<'all'|'enabled'|'disabled'>('all');
@@ -42,7 +48,12 @@ export default function Snapshot(){
  const [servicePage,setServicePage]=useState(0);
  const [transactionFilter,setTransactionFilter]=useState<'all'|'prolongOutcomes'>('all');
  const transactionSectionRef=useRef<HTMLDivElement>(null);
- const selectedAccountId=data?.accounts.find(a=>a.id===params.get('client'))?.id??data?.accounts[0]?.id;
+ const requestedAccount=data?.accounts.find(a=>a.id===params.get('client'));
+ const realRiskCandidates=data?.accounts.filter(a=>Number(a.id)>0&&!a.email.endsWith('@example.test'))??[];
+ const demoRiskCandidates=data?.accounts.filter(a=>a.email.startsWith('demo-stream-'))??[];
+ const riskCandidates=realRiskCandidates.length?realRiskCandidates:demoRiskCandidates;
+ const preferredRiskAccount=[...riskCandidates].sort((a,b)=>(risks?.[b.id]?.score??-1)-(risks?.[a.id]?.score??-1))[0];
+ const selectedAccountId=requestedAccount?.id??preferredRiskAccount?.id??data?.accounts[0]?.id;
 
  useEffect(()=>{
   const controller=new AbortController();
@@ -77,14 +88,28 @@ export default function Snapshot(){
 
  useEffect(()=>{setServicePage(0);setServiceSearch('');setStatusFilter('all');setAutoFilter('all');setTransactionFilter('all');},[selectedAccountId]);
 
+ useEffect(()=>{
+  const controller=new AbortController();
+  setPriceImpactError('');
+  setPriceImpactLoading(true);
+  setPriceEvents([]);
+  const refresh=()=>fetchPriceImpact(controller.signal,syntheticMode?'synthetic':'real').then(rows=>{setPriceEvents(rows);setPriceImpactError('');}).catch(reason=>{if(!controller.signal.aborted)setPriceImpactError(String(reason));}).finally(()=>{if(!controller.signal.aborted)setPriceImpactLoading(false);});
+  void refresh();
+  const timer=syntheticMode?window.setInterval(()=>{void refresh();},15000):undefined;
+  return()=>{controller.abort();if(timer)window.clearInterval(timer);};
+ },[data?.asOf,syntheticMode]);
+
+ const scenarioReady=useMemo(()=>syntheticMode&&demoEvidenceReady(priceEvents),[syntheticMode,priceEvents]);
+
  if(!data||!settings)return null;
- const account=data.accounts.find(a=>a.id===params.get('client'))??data.accounts[0];
+ const account=data.accounts.find(a=>a.id===selectedAccountId)??data.accounts[0];
  if(!account)return <Empty title="Нет клиентов" icon={<Server/>}>Добавьте аккаунты через API для анализа.</Empty>;
- const risk=risks?.[account.id];
+ const baseRisk=risks?.[account.id];
  const services=data.services.filter(service=>service.accountId===account.id);
  const transactions=data.transactions.filter(transaction=>transaction.accountId===account.id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
  const visibleTransactions=transactionFilter==='prolongOutcomes'?transactions.filter(transaction=>transaction.billingType==='prolong'):transactions;
- if(!risk)return <div className="market-state" role={riskError?'alert':'status'}>{riskError?`Snapshot Model недоступна: ${riskError}`:'Рассчитываем Snapshot Model на сервере…'}</div>;
+ if(!baseRisk)return <div className="market-state" role={riskError?'alert':'status'}>{riskError?`Snapshot Model недоступна: ${riskError}`:'Рассчитываем Snapshot Model на сервере…'}</div>;
+ const risk=syntheticMode?demoPriceRisk(baseRisk,settings,priceEvents.find(event=>event.accountId===account.id),scenarioReady):baseRisk;
 
  const report=rustReport?.clients.find(item=>String(item.accountId)===account.id);
  const peerClients=report&&rustReport?report.peers.map(id=>rustReport.clients.find(client=>client.accountId===id)).filter((client):client is RustClientReport=>Boolean(client)):[];
@@ -114,6 +139,9 @@ export default function Snapshot(){
  const availableFactorCount=risk.factors.filter(factor=>factor.available).length;
  const topFactors=[...risk.factors].filter(factor=>factor.available&&factor.points>0).sort((a,b)=>b.points-a.points).slice(0,3);
  const shortfallCents=Math.max(0,risk.upcomingCents-risk.spendableBalanceCents);
+ const clientPriceEvents=priceEvents.filter(event=>String(event.accountId)===account.id);
+ const recentPriceEvents=clientPriceEvents.filter(event=>Date.parse(event.changedAt)>=Date.now()-90*86_400_000);
+ const priceReviewCount=recentPriceEvents.filter(event=>needsPriceReview(event)).length;
  const attentionServices=new Set<string>([
   ...noAutoServices.map(service=>service.id),
   ...waitingServices.map(service=>service.id),
@@ -134,6 +162,7 @@ export default function Snapshot(){
   }
   if(key==='expiringRevenueShare'||key==='expiringRevenue')return {observation:`${soonExpiringServices.length} услуг истекают за ${settings.renewalWindowDays} дней · ${percent} месячной стоимости`,businessScale:expiringMonthlyCents===null?'Денежная оценка недоступна':monthlyScale(expiringMonthlyCents)};
   if(key==='paymentCoverage')return {observation:risk.upcomingCents>0&&risk.paymentCoverage!==null?`Покрытие ближайших платежей ${risk.paymentCoverage.toFixed(2)}×`:'В окне нет определённых платежей; покрытие не рассчитывается',businessScale:`Баланс ${money(risk.spendableBalanceCents)} · платежи ${money(risk.upcomingCents)} · дефицит ${money(shortfallCents)}`};
+  if(key==='priceRisk')return {observation:clientPriceEvents.length?`Сценарное повышение ${priceIncreasePercent(clientPriceEvents[0]).toFixed(1)}% · исход: ${priceOutcome(clientPriceEvents[0])}`:'Сценарного повышения нет',businessScale:'Синтетический сценарий; реальная оценка не меняется'};
   return {observation:factor.explanation,businessScale:'Нет данных для бизнес-оценки'};
  };
 
@@ -188,9 +217,11 @@ export default function Snapshot(){
 
  return <div className="snapshot-page">
   <div className="page-heading snapshot-heading">
-   <div><div className="eyebrow">ОБЪЯСНИМАЯ АНАЛИТИКА</div><h1>Snapshot Model</h1><p>Текущий профиль клиента · состояние на дату расчёта</p></div>
+   <div><div className="eyebrow">{syntheticMode?'СИНТЕТИЧЕСКИЙ СЦЕНАРИЙ':'ОБЪЯСНИМАЯ АНАЛИТИКА'}</div><h1>Snapshot Model</h1><p>{syntheticMode?'Сценарный балл на тестовой истории цен; реальные данные не изменены':'Текущий профиль клиента · состояние на дату расчёта'}</p></div>
    <AccountPicker accounts={data.accounts} value={account.id} onChange={value=>{setParams(current=>{const next=new URLSearchParams(current);next.set('client',value);return next;});setServicePage(0);}}/>
   </div>
+  <div className="price-impact-mode" role="group" aria-label="Режим ценового риска"><button type="button" className={!syntheticMode?'active':''} onClick={()=>setParams(current=>{const next=new URLSearchParams(current);next.delete('mode');return next;})}>Реальный Risk Score</button><button type="button" className={syntheticMode?'active':''} onClick={()=>setParams(current=>{const next=new URLSearchParams(current);next.set('mode','synthetic');return next;})}>Сценарный Risk Score</button></div>
+  {syntheticMode&&<p className="snapshot-analysis-note">Сценарий связан с существующими ID, но повышения, продления и расходы после них сгенерированы. Ценовой фактор {scenarioReady?'прошёл проверку групп и контролей':'не прошёл проверку достаточности'}; его вес в настройках: {settings.weights.priceRisk}. Реальный Risk Score остаётся без изменений.</p>}
 
   <div className="snapshot-top-grid">
    <Panel title={account.name} subtitle={`${account.id} · ${account.email}`} className="snapshot-overview" action={<Link className="snapshot-history-link" to={`/historical?client=${account.id}`}>История клиента <ArrowUpRight size={14}/></Link>}>
@@ -226,6 +257,14 @@ export default function Snapshot(){
     </div>
    </Panel>
   </div>
+
+  <Panel title="Сигнал: повышение стоимости" subtitle={syntheticMode?'Сценарное повышение и сгенерированное поведение':'Фактические изменения цены услуг этого клиента и последующие продления'} className="snapshot-price-impact" action={<Link className="snapshot-history-link" to={clientPriceEvents.length?`/price-impact?client=${account.id}&mode=${syntheticMode?'synthetic':'real'}`:`/price-impact?mode=${syntheticMode?'synthetic':'real'}`}>Вся история <ArrowUpRight size={14}/></Link>}>
+   {priceImpactLoading?<p className="snapshot-analysis-note">Загружаем историю стоимости…</p>:priceImpactError?<p className="snapshot-analysis-note" role="alert">История стоимости недоступна: {priceImpactError}</p>:clientPriceEvents.length===0?<p className="snapshot-analysis-note">Изменений стоимости услуг клиента в журнале за последние 12 месяцев нет.</p>:<>
+    <div className="snapshot-price-impact-summary"><div><small>Повышений за 12 месяцев</small><strong>{clientPriceEvents.length}</strong></div><div><small>За последние 90 дней</small><strong>{recentPriceEvents.length}</strong></div><div><small>На контроле</small><strong>{priceReviewCount}</strong></div></div>
+    <div className="snapshot-price-impact-list">{clientPriceEvents.slice(0,3).map(event=><div key={event.eventId}><strong>{event.planName} · +{priceIncreasePercent(event).toFixed(1)}%</strong><span>{date(event.changedAt)} · продления за 30 дней до/после: {event.renewalsBefore}/{event.renewalsAfter} · {({renewed:'продлил',adverse:'негативное событие',unknown:'исход неизвестен',pending:'наблюдение продолжается',not_due:'срок продления не наступал'} as const)[priceOutcome(event)]}</span></div>)}</div>
+   </>}
+   <p className="snapshot-analysis-note">{syntheticMode?'В сценарном режиме ценовой фактор влияет на показанный балл только при достаточности данных и положительном весе. В реальный Risk Score он не входит.':'Этот сигнал показывает наблюдаемое поведение после изменения цены. Совпадение по времени не устанавливает причину ухода и пока не добавляет баллы к Risk Score.'}</p>
+  </Panel>
 
   <div className="snapshot-reasons-grid">
    <Panel title="Главные причины риска" subtitle="Показаны факторы с наибольшим вкладом в Risk Score" className="snapshot-reasons">
@@ -299,8 +338,8 @@ export default function Snapshot(){
   </details>
 
   <div className="snapshot-bottom-grid">
-   <Panel title="Сценарий денежных обязательств" subtitle="7 / 30 / 60 / 90 дней · без будущих пополнений · текущая цена продления" className="snapshot-cashflow">
-    {cashflowError?<p className="snapshot-analysis-note" role="alert">Прогноз недоступен: {cashflowError}</p>:!cashflow?<p className="snapshot-analysis-note">Рассчитываем…</p>:<><div className="snapshot-cashflow-grid">{cashflow.windows.map(window=><div key={window.days}><small>{window.days} дней</small><strong>{money(window.projectedOutflowCents)}</strong><span>{window.scheduledRenewals} продлений</span><em className={window.deficitCents?'is-deficit':''}>{window.deficitCents?`Дефицит ${money(window.deficitCents)}`:`Баланс после: ${money(window.balanceAfterCents)}`}</em></div>)}</div><p className="snapshot-analysis-note">Начальный доступный баланс: {money(cashflow.startingBalanceCents)} · учтено услуг: {cashflow.includedServices}{cashflow.unresolvedServices?` · срок не определён у ${cashflow.unresolvedServices}`:''}. {cashflow.assumption}</p></>}
+  <Panel title="Сценарий денежных обязательств" subtitle="Оценка предстоящих продлений" className="snapshot-cashflow">
+    {cashflowError?<p className="snapshot-analysis-note" role="alert">Прогноз недоступен: {cashflowError}</p>:!cashflow?<p className="snapshot-analysis-note">Рассчитываем…</p>:<><div className="snapshot-cashflow-grid">{cashflow.windows.map(window=><div key={window.days}><small>{window.days} дней</small><strong>{money(window.projectedOutflowCents)}</strong><span>{window.scheduledRenewals} продлений</span><em className={window.deficitCents?'is-deficit':''}>{window.deficitCents?`Дефицит ${money(window.deficitCents)}`:`Баланс после: ${money(window.balanceAfterCents)}`}</em></div>)}</div><p className="snapshot-analysis-note">Начальный доступный баланс: {money(cashflow.startingBalanceCents)} · учтено услуг: {cashflow.includedServices}{cashflow.unresolvedServices?` · срок не определён у ${cashflow.unresolvedServices}`:''}.</p></>}
    </Panel>
    <Panel title="Финансовый журнал" subtitle="Пополнения, платежи и продления с известным источником" className="snapshot-ledger">
     {ledgerError?<p className="snapshot-analysis-note" role="alert">Журнал недоступен: {ledgerError}</p>:ledger.length===0?<p className="snapshot-analysis-note">Подтверждённых записей в журнале пока нет.</p>:<div className="table-scroll"><table><thead><tr><th>Дата</th><th>Событие</th><th>Услуга / тариф</th><th>Сумма</th><th>Статус</th><th>Источник</th></tr></thead><tbody>{ledger.map(entry=><tr key={`${entry.source}:${entry.eventId}`}>

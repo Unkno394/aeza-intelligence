@@ -59,6 +59,15 @@ user auth-inactive@aeza.test viewer 'Auth inactive'
 bash scripts/auth_user.sh disable auth-inactive@aeza.test >/dev/null
 AUTH_USER_NO_ADMIN=1 user auth-nobody@aeza.test viewer 'Auth nobody'
 AUTH_USER_UNVERIFIED=1 user auth-unverified@aeza.test viewer 'Auth unverified'
+user auth-ratelimit@aeza.test viewer 'Auth rate limit'
+
+kc_admin=(docker compose -f docker-compose.yml -f docker-compose.dev-auth.yml exec -T keycloak /opt/keycloak/bin/kcadm.sh)
+"${kc_admin[@]}" config credentials --server http://localhost:8080 --realm master \
+  --user "${KEYCLOAK_ADMIN:-admin}" --password "${KEYCLOAK_ADMIN_PASSWORD:-admin}" \
+  --config /tmp/kcadm.config >/dev/null
+export AUTH_RATE_USER_ID="$("${kc_admin[@]}" get users -r aeza -q 'email=auth-ratelimit@aeza.test' \
+  -q exact=true --fields id --format csv --noquotes --config /tmp/kcadm.config | head -n 1 | tr -d '\r')"
+[[ -n "$AUTH_RATE_USER_ID" ]] || { echo 'Could not find the Keycloak rate-limit test user' >&2; exit 1; }
 
 python3 - "$mode" <<'PY'
 import base64
@@ -113,6 +122,26 @@ def request(method, url, cookies=None, body=None, headers=None):
 
 def api(method, path, cookies=None, **kwargs):
     return request(method, PUBLIC_URL + path, cookies, **kwargs)
+
+
+def db_execute(sql):
+    subprocess.run(['psql', os.environ['DATABASE_URL'], '-X', '-q', '-v', 'ON_ERROR_STOP=1',
+                    '-c', sql], check=True, stdout=subprocess.DEVNULL)
+
+
+KCADM = ['docker', 'compose', '-f', 'docker-compose.yml', '-f', 'docker-compose.dev-auth.yml',
+         'exec', '-T', 'keycloak', '/opt/keycloak/bin/kcadm.sh']
+
+
+def kc_json(*args):
+    output = subprocess.check_output(KCADM + list(args) + ['--config', '/tmp/kcadm.config'], text=True)
+    return json.loads(output)
+
+
+def clear_keycloak_failures(user_id):
+    subprocess.run(KCADM + ['delete', f'attack-detection/brute-force/users/{user_id}',
+                             '-r', 'aeza', '--config', '/tmp/kcadm.config'],
+                   check=True, stdout=subprocess.DEVNULL)
 
 
 def wait_for_api():
@@ -259,8 +288,9 @@ print('Login: viewer')
 target, viewer, set_cookies = login('auth-viewer@aeza.test', return_to='/snapshot?account=1')
 check('callback returns to returnTo', target == '/snapshot?account=1', target)
 session_line = next((line for line in set_cookies if line.startswith('aeza_session=')), '')
-check('session cookie is HttpOnly and SameSite=Lax',
-      'HttpOnly' in session_line and 'SameSite=Lax' in session_line, session_line)
+check('session cookie flags match the local HTTP origin',
+      'HttpOnly' in session_line and 'SameSite=Lax' in session_line
+      and 'Secure' not in session_line, session_line)
 check('login cookie is cleared after the callback', not any(k.startswith('aeza_login') for k in viewer), str(viewer))
 status, _, body, _, _ = api('GET', '/api/auth/me', viewer)
 me = json.loads(body) if status == 200 else {}
@@ -279,6 +309,49 @@ for email, expected in (('auth-nobody@aeza.test', 'forbidden'),
                         ('auth-unverified@aeza.test', 'unverified')):
     target, jar, _ = login(email)
     check(f'{email} gets authError={expected}', target == f'/?authError={expected}' and 'aeza_session' not in jar, target)
+
+print('Login: brute-force protection')
+rate_limit_email = 'auth-ratelimit@aeza.test'
+rate_limit_user_id = os.environ['AUTH_RATE_USER_ID']
+clear_keycloak_failures(rate_limit_user_id)
+realm_config = kc_json('get', 'realms/aeza')
+failure_factor = int(realm_config.get('failureFactor') or 30)
+attempt_limit = min(failure_factor + 3, 60)
+rate_status = {}
+all_attempts_rejected = True
+try:
+    for attempt in range(1, attempt_limit + 1):
+        target, jar, _ = login(rate_limit_email, 'wrong-password')
+        all_attempts_rejected = all_attempts_rejected and target == 'keycloak:rejected' and not jar
+        if attempt % 5 == 0 or attempt == attempt_limit:
+            rate_status = kc_json('get', f'attack-detection/brute-force/users/{rate_limit_user_id}', '-r', 'aeza')
+            if rate_status.get('disabled'):
+                break
+    check('repeated incorrect passwords trigger Keycloak temporary lockout',
+          rate_status.get('disabled') is True,
+          f"attempts={attempt}, failureFactor={failure_factor}, status={rate_status}")
+    check('lockout attempts never issue an application session', all_attempts_rejected,
+          'a rejected attempt unexpectedly completed the OIDC callback')
+    target, jar, _ = login(rate_limit_email)
+    check('correct password is refused while Keycloak has the account locked',
+          target == 'keycloak:rejected' and not jar, target)
+finally:
+    clear_keycloak_failures(rate_limit_user_id)
+target, jar, _ = login(rate_limit_email)
+check('clearing the test lockout restores a valid login', target == '/' and 'aeza_session' in jar, target)
+
+print('OIDC callback database failure')
+db_execute("CREATE OR REPLACE FUNCTION public.aeza_auth_test_reject_session_insert() RETURNS trigger "
+           "LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced OIDC session insert failure'; END $$; "
+           "CREATE TRIGGER aeza_auth_test_reject_session_insert BEFORE INSERT ON public.admin_sessions "
+           "FOR EACH ROW EXECUTE FUNCTION public.aeza_auth_test_reject_session_insert()")
+try:
+    target, jar, _ = login('auth-viewer@aeza.test')
+    check('OIDC callback reports a database session-insert failure',
+          target == '/?authError=failed' and 'aeza_session' not in jar, target)
+finally:
+    db_execute('DROP TRIGGER aeza_auth_test_reject_session_insert ON public.admin_sessions; '
+               'DROP FUNCTION public.aeza_auth_test_reject_session_insert()')
 
 status, headers, _, jar, _ = api('GET', '/api/auth/login')
 state = urllib.parse.parse_qs(urllib.parse.urlsplit(headers['Location']).query)['state'][0]
@@ -313,6 +386,11 @@ viewer_socket = Socket(viewer)
 check('viewer WebSocket upgrades', viewer_socket.status == 101, f'HTTP {viewer_socket.status}')
 snapshot = viewer_socket.recv() or {}
 check('viewer receives the snapshot', snapshot.get('type') == 'snapshot', str(snapshot.get('type')))
+second_viewer_socket = Socket(viewer)
+second_viewer_snapshot = second_viewer_socket.recv() or {}
+check('a second browser tab receives its own snapshot',
+      second_viewer_socket.status == 101 and second_viewer_snapshot.get('type') == 'snapshot',
+      str(second_viewer_snapshot.get('type')))
 settings = snapshot.get('settings')
 viewer_socket.send({'type': 'updateSettings', 'requestId': 'v1', 'settings': settings})
 reply = viewer_socket.reply('v1') or {}
@@ -323,9 +401,27 @@ operator_socket.recv()
 operator_socket.send({'type': 'updateSettings', 'requestId': 'o1', 'settings': settings})
 reply = operator_socket.reply('o1') or {}
 check('operator can change Risk Score settings', reply.get('type') == 'ack', str(reply))
+viewer_update = viewer_socket.recv() or {}
+second_viewer_update = second_viewer_socket.recv() or {}
+check('first open tab receives the settings update',
+      viewer_update.get('type') == 'settings', str(viewer_update.get('type')))
+check('second open tab receives the same settings update',
+      second_viewer_update.get('type') == 'settings'
+      and second_viewer_update.get('settings') == viewer_update.get('settings'),
+      str(second_viewer_update.get('type')))
 operator_socket.close()
 
 print('Logout')
+db_execute("CREATE OR REPLACE FUNCTION public.aeza_auth_test_reject_session_delete() RETURNS trigger "
+           "LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced OIDC session delete failure'; END $$; "
+           "CREATE TRIGGER aeza_auth_test_reject_session_delete BEFORE DELETE ON public.admin_sessions "
+           "FOR EACH ROW EXECUTE FUNCTION public.aeza_auth_test_reject_session_delete()")
+try:
+    status = api('POST', '/api/auth/logout', operator, headers={'Origin': PUBLIC_URL})[0]
+    check('logout reports a session database-delete failure', status == 500, f'HTTP {status}')
+finally:
+    db_execute('DROP TRIGGER aeza_auth_test_reject_session_delete ON public.admin_sessions; '
+               'DROP FUNCTION public.aeza_auth_test_reject_session_delete()')
 status = api('POST', '/api/auth/logout', operator, headers={'Origin': FOREIGN})[0]
 check('logout from a foreign Origin is 403', status == 403, f'HTTP {status}')
 status, _, body, _, set_cookies = api('POST', '/api/auth/logout', operator, headers={'Origin': PUBLIC_URL})
@@ -351,9 +447,34 @@ try:
         closed = False
     check('open WebSocket of a deactivated admin is closed', closed, 'still open after 35 s')
     print(f'     closed after {time.time() - started:.0f} s')
+    second_viewer_socket.sock.settimeout(35)
+    second_closed = False
+    try:
+        while second_viewer_socket.recv() is not None:
+            pass
+        second_closed = True
+    except socket.timeout:
+        pass
+    check('second open tab of a deactivated admin is also closed', second_closed,
+          'still open after deactivation')
 finally:
     viewer_socket.close()
+    second_viewer_socket.close()
     subprocess.run(['bash', 'scripts/auth_user.sh', 'enable', 'auth-viewer@aeza.test'], check=True, stdout=subprocess.DEVNULL)
+
+reconnected_socket = Socket(viewer)
+reconnected_snapshot = reconnected_socket.recv() if reconnected_socket.status == 101 else None
+check('viewer can reconnect after service access is restored',
+      reconnected_socket.status == 101 and (reconnected_snapshot or {}).get('type') == 'snapshot',
+      str((reconnected_snapshot or {}).get('type')))
+reconnected_socket.close()
+
+api_logs = subprocess.run(['docker', 'compose', 'logs', '--no-color', '--tail', '2000', 'api'],
+                          check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
+for secret in (PASSWORD, os.environ.get('KEYCLOAK_CLIENT_SECRET'), os.environ.get('OIDC_CLIENT_SECRET')):
+    if secret:
+        check('authentication secrets are absent from API logs',
+              secret.encode() not in api_logs, 'a configured credential appeared in service logs')
 
 if failures:
     sys.exit(f'\n{len(failures)} auth check(s) failed')

@@ -1,10 +1,10 @@
 pub mod api;
-pub mod statistics;
 pub mod behavior;
 pub mod competition;
 pub mod currency;
 pub mod market_data;
 pub mod money;
+pub mod statistics;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -537,11 +537,10 @@ fn policy_eligible(s: &Scenario, plan: &Plan, price: f64) -> bool {
             .is_none_or(|v| details.is_some_and(|d| d.cpu_class.as_ref() == Some(v)))
         && (!s.require_complete_monthly_payment
             || details.is_some_and(|d| d.complete_monthly_payment))
-
 }
 fn eligible(s: &Scenario, b: &Buyer, plan: &Plan, price: f64) -> bool {
     let g = &s.segments[b.segment];
-    policy_eligible(s,plan,price)
+    policy_eligible(s, plan, price)
         && price <= b.budget
         && plan.vcpu >= g.vcpu
         && plan.ram_gb >= g.ram_gb
@@ -789,14 +788,43 @@ fn simulate_rub(s: Scenario, mut market: Vec<Plan>) -> Result<Report, String> {
                         capacity_blocked += usize::from(blocked);
                         choice
                     };
-                    let free = [limits[0]-used[0],limits[1]-used[1],limits[2]-used[2]];
-                    let reason = behavior::classify(&s,b,&market,&prices,sensitivity,free,next,forced_departure);
-                    let row = behavior_rows.entry(b.segment).or_insert_with(|| behavior::SegmentMonth {segment_index:b.segment,segment:s.segments[b.segment].name.clone(),..Default::default()});
+                    let free = [
+                        limits[0] - used[0],
+                        limits[1] - used[1],
+                        limits[2] - used[2],
+                    ];
+                    let reason = behavior::classify(
+                        &s,
+                        b,
+                        &market,
+                        &prices,
+                        sensitivity,
+                        free,
+                        next,
+                        forced_departure,
+                    );
+                    let row =
+                        behavior_rows
+                            .entry(b.segment)
+                            .or_insert_with(|| behavior::SegmentMonth {
+                                segment_index: b.segment,
+                                segment: s.segments[b.segment].name.clone(),
+                                ..Default::default()
+                            });
                     let segment_aeza_revenue = next
                         .filter(|i| market[*i].provider == "aeza")
-                        .map(|i| money::float(price_ticks[i].expect("chosen offer has a billable price")))
+                        .map(|i| {
+                            money::float(price_ticks[i].expect("chosen offer has a billable price"))
+                        })
                         .unwrap_or(0.);
-                    row.record(b, &market, next, forced_departure, reason, segment_aeza_revenue);
+                    row.record(
+                        b,
+                        &market,
+                        next,
+                        forced_departure,
+                        reason,
+                        segment_aeza_revenue,
+                    );
                     behavior_ids.entry(reason.into()).or_default().insert(b.id);
                     let from = old.map_or("outside", |i| market[i].provider.as_str());
                     let to = next.map_or("outside", |i| market[i].provider.as_str());
@@ -935,7 +963,16 @@ fn simulate_rub(s: Scenario, mut market: Vec<Plan>) -> Result<Report, String> {
                     ledger.insert(provider.clone(), amounts);
                 }
                 months.push(Month {
-                    buyer_behavior: behavior_rows.into_values().map(|mut r|{r.loss_rate=(r.aeza_at_risk>0).then(||(r.switches_out+r.exogenous_exits+r.choice_exits) as f64/r.aeza_at_risk as f64);r}).collect(),
+                    buyer_behavior: behavior_rows
+                        .into_values()
+                        .map(|mut r| {
+                            r.loss_rate = (r.aeza_at_risk > 0).then(|| {
+                                (r.switches_out + r.exogenous_exits + r.choice_exits) as f64
+                                    / r.aeza_at_risk as f64
+                            });
+                            r
+                        })
+                        .collect(),
                     month: month + 1,
                     aeza_effective_prices_usd: market
                         .iter()
@@ -972,7 +1009,10 @@ fn simulate_rub(s: Scenario, mut market: Vec<Plan>) -> Result<Report, String> {
                 });
             }
             runs.push(Run {
-                behavior_unique_clients: behavior_ids.into_iter().map(|(k,v)|(k,v.len())).collect(),
+                behavior_unique_clients: behavior_ids
+                    .into_iter()
+                    .map(|(k, v)| (k, v.len()))
+                    .collect(),
                 flows: flows_from(run_flows),
                 strategy: strategy.name.clone(),
                 sensitivity,

@@ -4,7 +4,7 @@ import type { RiskResult, Settings } from '../../types';
 import { previewRiskDistribution, previewRiskResult } from './settingsPreview';
 
 const settings: Settings = {
-  weights: { paymentCoverage: 35, noAutoProlong: 15, prolongWait: 15, failedProlong: 10, expiringRevenue: 25 },
+  weights: { paymentCoverage: 35, noAutoProlong: 15, prolongWait: 15, failedProlong: 10, expiringRevenue: 25, priceRisk: 0 },
   mediumThreshold: 35, highThreshold: 65, renewalWindowDays: 14, historicalMinDays: 30,
 };
 const risk: RiskResult = {

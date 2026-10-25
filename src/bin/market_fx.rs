@@ -113,6 +113,10 @@ async fn fetch_rate(client: &Client, base: &str, requested_on: NaiveDate) -> Res
         .json()
         .await
         .context("invalid Frankfurter response")?;
+    validate_rate(base, requested_on, rate)
+}
+
+fn validate_rate(base: &str, requested_on: NaiveDate, rate: Rate) -> Result<Rate> {
     if rate.base != base
         || rate.quote != "RUB"
         || rate.date > requested_on
@@ -122,4 +126,45 @@ async fn fetch_rate(client: &Client, base: &str, requested_on: NaiveDate) -> Res
         bail!("invalid {base}/RUB rate response");
     }
     Ok(rate)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn date(day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 10, day).unwrap()
+    }
+
+    fn rate(base: &str, quote: &str, day: u32, value: f64) -> Rate {
+        Rate {
+            date: date(day),
+            base: base.into(),
+            quote: quote.into(),
+            rate: value,
+        }
+    }
+
+    #[test]
+    fn accepts_a_positive_rate_dated_on_or_before_the_observation() {
+        assert!(validate_rate("EUR", date(25), rate("EUR", "RUB", 25, 93.4)).is_ok());
+        assert!(validate_rate("USD", date(25), rate("USD", "RUB", 24, 81.2)).is_ok());
+    }
+
+    #[test]
+    fn rejects_mismatched_currencies_future_dates_and_invalid_values() {
+        for (base, value) in [
+            ("EUR", rate("USD", "RUB", 25, 90.0)),
+            ("EUR", rate("EUR", "USD", 25, 90.0)),
+            ("EUR", rate("EUR", "RUB", 26, 90.0)),
+            ("EUR", rate("EUR", "RUB", 25, 0.0)),
+            ("EUR", rate("EUR", "RUB", 25, -1.0)),
+            ("EUR", rate("EUR", "RUB", 25, f64::INFINITY)),
+        ] {
+            assert!(
+                validate_rate(base, date(25), value).is_err(),
+                "invalid {base}/RUB response should be rejected"
+            );
+        }
+    }
 }

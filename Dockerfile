@@ -1,9 +1,14 @@
 FROM rust:1.94-slim-bookworm AS build
 WORKDIR /app
+ENV CARGO_NET_RETRY=8 \
+    CARGO_HTTP_TIMEOUT=120 \
+    CARGO_HTTP_LOW_SPEED_LIMIT=1
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src src
+RUN cargo fetch --locked
 COPY migrations migrations
-RUN cargo build --release --locked --bins
+COPY docs/openapi-v1.json docs/openapi-v1.json
+RUN cargo build --release --locked --offline --bins
 
 FROM debian:bookworm-slim
 # search_interest calls curl by default (--transport curl).

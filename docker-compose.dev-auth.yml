@@ -1,17 +1,20 @@
-# Local Keycloak as the OIDC provider: real sign-in with a password, without
-# an external IdP.
+# Explicit local Keycloak configuration for auth scripts and backward
+# compatibility. The default docker-compose.yml now uses this same provider.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.dev-auth.yml up -d
 #   bash scripts/auth_user.sh add me@example.com operator    # account + role
 #   bash scripts/check_auth.sh                               # end-to-end checks
 #
-# Keycloak keeps its users in the keycloak-data volume; the realm and the
+# Keycloak keeps its users in the keycloak-dev-auth-data volume; the realm and the
 # client are imported from dev/keycloak on the first start. This overlay
 # replaces the OIDC_* settings and AUTH_DISABLED from .env for the api service.
 
 services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.0.7
+    # Publish only on loopback. The API uses host networking and reaches
+    # Keycloak through this port.
+    network_mode: bridge
     restart: unless-stopped
     command: ["start-dev", "--import-realm", "--http-port=8080", "--health-enabled=true"]
     # The issuer follows the request host, so the browser and market_api (host
@@ -26,8 +29,8 @@ services:
     volumes:
       # /opt/keycloak/data belongs to the keycloak user in the image, so the
       # new volume gets the same owner.
-      - keycloak-data:/opt/keycloak/data
-      - ./dev/keycloak:/opt/keycloak/data/import:ro
+      - keycloak-dev-auth-data:/opt/keycloak/data
+      - ./dev/keycloak/aeza-realm.json:/opt/keycloak/data/import/aeza-realm.json:ro
     healthcheck:
       # The image has no curl; ask the management port with bash alone.
       test:
@@ -52,4 +55,4 @@ services:
         condition: service_healthy
 
 volumes:
-  keycloak-data:
+  keycloak-dev-auth-data:

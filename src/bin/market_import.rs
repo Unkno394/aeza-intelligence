@@ -225,12 +225,7 @@ async fn main() -> Result<()> {
         } => {
             let bytes =
                 std::fs::read(&file).with_context(|| format!("cannot read {}", file.display()))?;
-            let envelope: SnapshotEnvelope = serde_json::from_slice(&bytes)?;
-            let actual_sha = format!("{:x}", Sha256::digest(envelope.payload.as_bytes()));
-            if actual_sha != envelope.sha256.to_ascii_lowercase() {
-                bail!("Aéza catalog SHA-256 mismatch");
-            }
-            let snapshot: AezaSnapshot = serde_json::from_str(&envelope.payload)?;
+            let snapshot = parse_snapshot_envelope(&bytes)?;
             if dry_run {
                 let available = snapshot
                     .aeza_plans
@@ -252,47 +247,8 @@ async fn main() -> Result<()> {
             apply_schema(&pool).await?;
             let mut total = 0;
             for plan in snapshot.aeza_plans {
-                if plan.availability() != "available_from_source" {
+                let Some(offer) = aeza_offer(&plan) else {
                     continue;
-                }
-                if plan.details.original_price.unit != "month" {
-                    continue;
-                }
-                let currency = plan.details.original_price.currency.clone();
-                if !matches!(currency.as_str(), "EUR" | "USD" | "RUB") {
-                    continue;
-                }
-                let Some(price_minor) = decimal_minor(&plan.details.original_price.amount) else {
-                    continue;
-                };
-                let Some(cpu_cores) = positive_whole(plan.vcpu) else {
-                    continue;
-                };
-                let Some(ram_mib) = positive_whole(plan.ram_gb * 1024.0) else {
-                    continue;
-                };
-                let Some(disk_gib) = positive_whole(plan.disk_gb) else {
-                    continue;
-                };
-                let offer = aeza_intelligence::market::Offer {
-                    plan_key: plan.name.clone(),
-                    plan_name: plan.name.clone(),
-                    cpu_cores: Some(cpu_cores),
-                    ram_mib: Some(ram_mib),
-                    disk_gib: Some(disk_gib),
-                    disk_type: None,
-                    region: plan.regions.first().cloned(),
-                    price_minor: Some(price_minor),
-                    currency: Some(currency),
-                    billing_period: Some("month".to_owned()),
-                    price_kind: "official_catalog".to_owned(),
-                    vat_included: None,
-                    raw_excerpt: format!(
-                        "catalog_id: {}; source_region: {}; {}",
-                        plan.id,
-                        plan.details.source_region,
-                        plan.details.notes.join("; ")
-                    ),
                 };
                 let source = ObservationSource {
                     kind: "live",
@@ -452,6 +408,51 @@ impl AezaPlan {
     }
 }
 
+fn parse_snapshot_envelope(bytes: &[u8]) -> Result<AezaSnapshot> {
+    let envelope: SnapshotEnvelope = serde_json::from_slice(bytes)?;
+    let actual_sha = format!("{:x}", Sha256::digest(envelope.payload.as_bytes()));
+    if actual_sha != envelope.sha256.to_ascii_lowercase() {
+        bail!("Aéza catalog SHA-256 mismatch");
+    }
+    Ok(serde_json::from_str(&envelope.payload)?)
+}
+
+fn aeza_offer(plan: &AezaPlan) -> Option<aeza_intelligence::market::Offer> {
+    if plan.availability() != "available_from_source"
+        || plan.details.original_price.unit != "month"
+        || !matches!(
+            plan.details.original_price.currency.as_str(),
+            "EUR" | "USD" | "RUB"
+        )
+    {
+        return None;
+    }
+    let price_minor = decimal_minor(&plan.details.original_price.amount)?;
+    let cpu_cores = positive_whole(plan.vcpu)?;
+    let ram_mib = positive_whole(plan.ram_gb * 1024.0)?;
+    let disk_gib = positive_whole(plan.disk_gb)?;
+    Some(aeza_intelligence::market::Offer {
+        plan_key: plan.name.clone(),
+        plan_name: plan.name.clone(),
+        cpu_cores: Some(cpu_cores),
+        ram_mib: Some(ram_mib),
+        disk_gib: Some(disk_gib),
+        disk_type: None,
+        region: plan.regions.first().cloned(),
+        price_minor: Some(price_minor),
+        currency: Some(plan.details.original_price.currency.clone()),
+        billing_period: Some("month".to_owned()),
+        price_kind: "official_catalog".to_owned(),
+        vat_included: None,
+        raw_excerpt: format!(
+            "catalog_id: {}; source_region: {}; {}",
+            plan.id,
+            plan.details.source_region,
+            plan.details.notes.join("; ")
+        ),
+    })
+}
+
 fn positive_whole(value: f64) -> Option<i32> {
     (value.is_finite() && value > 0.0 && value <= i32::MAX as f64 && value.fract() == 0.0)
         .then_some(value as i32)
@@ -581,4 +582,162 @@ async fn fetch_html(client: &Client, url: &str) -> Result<(String, String)> {
     }
     let html = String::from_utf8(bytes.to_vec()).context("HTML is not UTF-8")?;
     Ok((html, final_url))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AezaPlan, aeza_offer, decimal_minor, parse_snapshot_envelope, positive_whole};
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+
+    fn plan(
+        availability: &str,
+        currency: &str,
+        unit: &str,
+        price: &str,
+        vcpu: f64,
+        ram_gb: f64,
+        disk_gb: f64,
+    ) -> AezaPlan {
+        serde_json::from_value(json!({
+            "id":"basic-1", "name":"Basic", "vcpu":vcpu,
+            "ram_gb":ram_gb, "disk_gb":disk_gb, "regions":["DE-FRA"],
+            "source":"https://aeza.test/plans/basic",
+            "details": {
+                "original_price":{"amount":price,"currency":currency,"unit":unit},
+                "source_region":"Frankfurt", "availability":availability, "notes":["monthly price"]
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn signed_catalog_hash_and_payload_are_checked_before_import() {
+        let payload = r#"{"prepared_as_of":"2026-10-24T00:00:00Z","aeza_plans":[]}"#;
+        let digest = format!("{:x}", Sha256::digest(payload.as_bytes()));
+        let envelope =
+            serde_json::to_vec(&json!({"payload":payload,"sha256":digest.to_uppercase()})).unwrap();
+        assert!(
+            parse_snapshot_envelope(&envelope)
+                .unwrap()
+                .aeza_plans
+                .is_empty()
+        );
+
+        let wrong_hash = serde_json::to_vec(&json!({"payload":payload,"sha256":"00"})).unwrap();
+        let error = parse_snapshot_envelope(&wrong_hash).err().unwrap();
+        assert!(error.to_string().contains("SHA-256 mismatch"));
+
+        let invalid_payload = "not-json";
+        let digest = format!("{:x}", Sha256::digest(invalid_payload.as_bytes()));
+        let malformed =
+            serde_json::to_vec(&json!({"payload":invalid_payload,"sha256":digest})).unwrap();
+        assert!(parse_snapshot_envelope(&malformed).is_err());
+    }
+
+    #[test]
+    fn aeza_catalog_maps_minor_currency_specs_and_region_without_rounding_unknowns() {
+        let offer = aeza_offer(&plan(
+            "available_from_source",
+            "EUR",
+            "month",
+            "12.34",
+            4.0,
+            8.0,
+            80.0,
+        ))
+        .unwrap();
+        assert!(offer.is_complete());
+        assert_eq!(offer.price_minor, Some(1234));
+        assert_eq!(offer.currency.as_deref(), Some("EUR"));
+        assert_eq!(offer.cpu_cores, Some(4));
+        assert_eq!(offer.ram_mib, Some(8192));
+        assert_eq!(offer.disk_gib, Some(80));
+        assert_eq!(offer.region.as_deref(), Some("DE-FRA"));
+        assert_eq!(offer.billing_period.as_deref(), Some("month"));
+
+        for invalid in [
+            plan("unknown", "EUR", "month", "12.34", 4.0, 8.0, 80.0),
+            plan(
+                "available_from_source",
+                "EUR",
+                "year",
+                "12.34",
+                4.0,
+                8.0,
+                80.0,
+            ),
+            plan(
+                "available_from_source",
+                "GBP",
+                "month",
+                "12.34",
+                4.0,
+                8.0,
+                80.0,
+            ),
+            plan(
+                "available_from_source",
+                "EUR",
+                "month",
+                "12.345",
+                4.0,
+                8.0,
+                80.0,
+            ),
+            plan(
+                "available_from_source",
+                "EUR",
+                "month",
+                "12.34",
+                4.5,
+                8.0,
+                80.0,
+            ),
+            plan(
+                "available_from_source",
+                "EUR",
+                "month",
+                "12.34",
+                4.0,
+                0.0005,
+                80.0,
+            ),
+            plan(
+                "available_from_source",
+                "EUR",
+                "month",
+                "12.34",
+                4.0,
+                8.0,
+                0.0,
+            ),
+        ] {
+            assert!(
+                aeza_offer(&invalid).is_none(),
+                "invalid catalog row was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn euro_minor_amount_and_whole_resource_parsers_reject_invalid_ranges() {
+        for (raw, expected) in [
+            ("0", Some(0)),
+            ("1", Some(100)),
+            ("1.2", Some(120)),
+            ("12.34", Some(1234)),
+            ("12.345", None),
+            ("-1.00", None),
+            ("1e3", None),
+        ] {
+            assert_eq!(decimal_minor(raw), expected, "{raw}");
+        }
+        assert_eq!(positive_whole(1.0), Some(1));
+        assert_eq!(positive_whole(0.0), None);
+        assert_eq!(positive_whole(-1.0), None);
+        assert_eq!(positive_whole(f64::NAN), None);
+        assert_eq!(positive_whole(f64::INFINITY), None);
+        assert_eq!(positive_whole(f64::MAX), None);
+    }
 }
