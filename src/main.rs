@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use aeza_intelligence::analysis::{self, Params, Report};
-use aeza_intelligence::{Dataset, PgAdapter, passwords};
+use aeza_intelligence::{Dataset, PgAdapter, config::Config, passwords};
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
@@ -56,14 +56,20 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Set the DEFAULT_AUTH password of an existing public.admins row. The
-    /// password is read from the first line of stdin.
+    /// Set the password login of an existing public.admins row. The password
+    /// is read from the first line of stdin.
     SetPassword { email: String },
+    /// Print a value of the checked config.toml (AEZA_CONFIG), e.g. auth.mode,
+    /// or the whole configuration as JSON.
+    Config { key: Option<String> },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    if let Command::Config { key } = &cli.command {
+        return print_config(key.as_deref());
+    }
     let adapter = PgAdapter::connect(&cli.database_url)
         .await
         .context("failed to connect to PostgreSQL")?;
@@ -73,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
             adapter.migrate().await?;
             println!("Migrations applied");
         }
+        Command::Config { .. } => unreachable!("handled before connecting"),
         Command::SetPassword { email } => {
             let mut password = String::new();
             std::io::stdin().read_line(&mut password)?;
@@ -215,4 +222,20 @@ fn fmt_opt(value: Option<f64>) -> String {
 
 fn join_ids(ids: &[i64]) -> String {
     ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+}
+
+/// `key` is a dotted path such as auth.mode; strings print without quotes.
+fn print_config(key: Option<&str>) -> anyhow::Result<()> {
+    let mut value = serde_json::to_value(Config::load()?)?;
+    for part in key.into_iter().flat_map(|key| key.split('.')) {
+        value = value
+            .get(part)
+            .cloned()
+            .with_context(|| format!("no {} in the configuration", key.unwrap_or_default()))?;
+    }
+    match value {
+        serde_json::Value::String(text) => println!("{text}"),
+        other => println!("{}", serde_json::to_string_pretty(&other)?),
+    }
+    Ok(())
 }

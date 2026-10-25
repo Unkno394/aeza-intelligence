@@ -11,6 +11,7 @@ use std::{
 
 use aeza_intelligence::{
     PgAdapter,
+    config::Config,
     analysis::{self, Params},
     historical::{HistoricalModel, lcs_similarity},
     model::ClientFeatures,
@@ -34,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use tokio::sync::{Mutex, broadcast};
 
-use crate::auth::{Admin, Auth, AuthArgs, Session};
+use crate::auth::{Admin, Auth, Secrets, Session};
 
 /// How often the live channel checks operation_logs for client data changes.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -55,8 +56,6 @@ struct Cli {
     database_url: String,
     #[arg(long, default_value = "127.0.0.1:3000")]
     listen: SocketAddr,
-    #[command(flatten)]
-    auth: AuthArgs,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -475,12 +474,14 @@ struct SnapshotFactor {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Before the database, so a configuration mistake is reported first.
+    let config = Config::load()?;
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&cli.database_url)
         .await?;
     PgAdapter::from_pool(pool.clone()).migrate().await?;
-    let auth = Auth::new(cli.auth, &pool).await?;
+    let auth = Auth::new(&config, Secrets::from_env(), &pool).await?;
     let (live, _watcher) = Live::start(pool.clone()).await?;
     let app = router(AppState { pool, live, auth });
     let listener = tokio::net::TcpListener::bind(cli.listen).await?;

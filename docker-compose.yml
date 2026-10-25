@@ -1,17 +1,27 @@
 # Everything starts with one command:
 #
-#   docker compose up -d --build        # then open http://127.0.0.1:8080
+#   docker compose up -d --build        # then open server.public_url of config.toml
 #
 # Order: existing PostgreSQL → migrate → seed (skipped when clients exist) →
-# keycloak, api, snapshots, market collectors, simulator → frontend
-# (FRONTEND_PORT).
+# api, snapshots, market collectors, simulator → frontend on port 8080.
+# Optional profiles: sso (Keycloak for auth.mode = "oidc") and demo.
 #
-# DATABASE_URL points to the existing PostgreSQL on the Linux host.
-# Search interest is collected only when TRENDSMCP_API_KEY is set.
+# Settings live in config.toml, mounted read-only into the containers that
+# read it; .env holds only secrets. Ports and profiles are set in this file.
 
 name: aeza-intelligence
 
 x-database-url: &database-url ${DATABASE_URL:?Set DATABASE_URL in .env}
+
+# A missing config.toml is an error instead of an empty directory in its place.
+x-config: &config
+  type: bind
+  # AEZA_CONFIG_FILE: another file for one run, as scripts/check_auth.sh does.
+  source: ${AEZA_CONFIG_FILE:-./config.toml}
+  target: /etc/aeza/config.toml
+  read_only: true
+  bind:
+    create_host_path: false
 
 x-app: &app
   build: .
@@ -19,51 +29,49 @@ x-app: &app
   network_mode: host
   environment:
     DATABASE_URL: *database-url
+    AEZA_CONFIG: /etc/aeza/config.toml
+  volumes:
+    - *config
   depends_on:
     migrate:
       condition: service_completed_successfully
 
 services:
-  # Local OIDC provider, started with COMPOSE_PROFILES=sso (not needed with
-  # DEFAULT_AUTH=true). The realm, the client and the analyst@aeza.local
-  # account are imported from keycloak/ on the first start; afterwards
-  # Keycloak keeps its accounts in the keycloak volume (scripts/auth_user.sh).
+  # OIDC provider for auth.mode = "oidc": docker compose --profile sso up -d.
+  # The realm, the client and the analyst@aeza.local account are imported from
+  # keycloak/ on the first start; afterwards Keycloak keeps its accounts in the
+  # keycloak volume (scripts/auth_user.sh).
   keycloak:
     image: quay.io/keycloak/keycloak:26.8.1
     profiles: ["sso"]
     restart: unless-stopped
-    # Compose interpolates services outside the active profiles too, so the
-    # passwords are checked here instead of with ${VAR:?}: DEFAULT_AUTH setups
-    # need not set them, and Keycloak never starts with an empty one.
-    entrypoint:
-      - bash
-      - -c
-      - >-
-        [[ -n "$$KC_BOOTSTRAP_ADMIN_PASSWORD" && -n "$$SSO_USER_PASSWORD" ]] ||
-        { echo "Set KEYCLOAK_ADMIN_PASSWORD and SSO_USER_PASSWORD in .env" >&2; exit 1; };
-        exec /opt/keycloak/bin/kc.sh "$$@"
-      - kc.sh
+    # keycloak/start.sh points the client's redirect URIs at server.public_url
+    # of config.toml on every start.
+    entrypoint: ["/opt/aeza/start.sh"]
     command: ["start-dev", "--import-realm", "--http-port=8080", "--health-enabled=true"]
     # The browser and market_api (host network) both reach Keycloak at
-    # KEYCLOAK_URL, so the issuer they see is the same.
+    # http://127.0.0.1:8081, the auth.oidc.issuer of config.toml.
     ports:
-      - "127.0.0.1:${KEYCLOAK_PORT:-8081}:8080"
+      - "127.0.0.1:8081:8080"
     environment:
-      KC_HOSTNAME: ${KEYCLOAK_URL:-http://127.0.0.1:${KEYCLOAK_PORT:-8081}}
-      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_HOSTNAME: http://127.0.0.1:8081
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-}
       SSO_USER_PASSWORD: ${SSO_USER_PASSWORD:-}
-      KC_AEZA_PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:${FRONTEND_PORT:-8080}}
     volumes:
       # /opt/keycloak/data belongs to the keycloak user in the image, so the
       # new volume gets the same owner.
       - keycloak:/opt/keycloak/data
-      - ./keycloak:/opt/keycloak/data/import:ro
+      - ./keycloak/aeza-realm.json:/opt/keycloak/data/import/aeza-realm.json:ro
+      - ./keycloak/start.sh:/opt/aeza/start.sh:ro
+      - *config
     healthcheck:
-      # The image has no curl; ask the management port with bash alone.
+      # Ready once start.sh has updated the client. The image has no curl; ask
+      # the management port with bash alone.
       test:
         - CMD-SHELL
         - >-
+          test -f /tmp/aeza-client-ready &&
           exec 3<>/dev/tcp/127.0.0.1/9000 &&
           printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
           grep -q '"UP"' <&3
@@ -89,26 +97,16 @@ services:
     restart: unless-stopped
     entrypoint: ["market_api"]
     command: ["--listen", "0.0.0.0:3000"]
-    # Login settings; see .env.example. DEFAULT_AUTH=true signs in with passwords
-    # from public.admins; otherwise through OIDC, by default the bundled
-    # Keycloak (COMPOSE_PROFILES=sso).
     environment:
       DATABASE_URL: *database-url
-      OIDC_ISSUER: ${OIDC_ISSUER:-${KEYCLOAK_URL:-http://127.0.0.1:${KEYCLOAK_PORT:-8081}}/realms/aeza}
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-aeza-intelligence}
+      AEZA_CONFIG: /etc/aeza/config.toml
+      # [auth.default_user] and a confidential OIDC client.
+      DEFAULT_USER_PASSWORD: ${DEFAULT_USER_PASSWORD:-}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
-      OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
-      PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:${FRONTEND_PORT:-8080}}
-      SESSION_HOURS: ${SESSION_HOURS:-12}
-      AUTH_DISABLED: ${AUTH_DISABLED:-false}
-      DEFAULT_AUTH: ${DEFAULT_AUTH:-false}
-      ENABLE_DEFAULT_USER: ${ENABLE_DEFAULT_USER:-false}
-      LOCAL_ADMIN_USER: ${LOCAL_ADMIN_USER:-}
-      LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-}
     depends_on:
       keycloak:
         condition: service_healthy
-        # Absent without the sso profile, e.g. with DEFAULT_AUTH=true.
+        # Absent without the sso profile, e.g. with auth.mode = "password".
         required: false
       migrate:
         condition: service_completed_successfully
@@ -122,16 +120,12 @@ services:
       seed:
         condition: service_completed_successfully
 
+  # Synthetic customers, configured by [demo] of config.toml.
   demo-stream:
     <<: *app
     profiles: ["demo"]
     restart: unless-stopped
     entrypoint: ["demo_stream"]
-    environment:
-      DATABASE_URL: *database-url
-      DEMO_STREAM_INTERVAL_SECONDS: ${DEMO_STREAM_INTERVAL_SECONDS:-15}
-      DEMO_REPLAY_DAYS: ${DEMO_REPLAY_DAYS:-60}
-      DEMO_REPLAY_DELAY_MS: ${DEMO_REPLAY_DELAY_MS:-200}
     depends_on:
       seed:
         condition: service_completed_successfully
@@ -153,6 +147,7 @@ services:
           sleep 86400
         done
 
+  # Search interest, collected only when TRENDSMCP_API_KEY is set in .env.
   trends:
     <<: *app
     restart: "on-failure:5"
@@ -173,12 +168,20 @@ services:
     image: aeza-market-simulator:latest
     restart: unless-stopped
 
+  # Serves the UI and proxies /api. With an https:// server.public_url it
+  # serves HTTPS with ./certs/tls.crt and tls.key, generated as a self-signed
+  # pair when missing. The published port must match server.public_url.
   frontend:
     build: ./frontend
     image: aeza-intelligence-frontend:latest
     restart: unless-stopped
+    environment:
+      AEZA_CONFIG: /etc/aeza/config.toml
+    volumes:
+      - ./certs:/certs
+      - *config
     ports:
-      - "${FRONTEND_PORT:-8080}:80"
+      - "8080:80"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

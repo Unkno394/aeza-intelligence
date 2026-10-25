@@ -1,8 +1,8 @@
 //! Login and cookie sessions.
 //!
 //! Admins sign in either through OIDC (Authorization Code + PKCE), where the
-//! provider only proves the email, or with DEFAULT_AUTH=true by a password
-//! stored in public.admins. Either way access is granted to active rows of
+//! provider only proves the email, or with `auth.mode = "password"` by a
+//! password stored in public.admins. Either way access is granted to active rows of
 //! public.admins, their role decides what the session may change, and the
 //! session lives in public.admin_sessions.
 
@@ -28,7 +28,10 @@ use openidconnect::{
     url::Url,
 };
 use serde::{Deserialize, Serialize};
-use aeza_intelligence::passwords;
+use aeza_intelligence::{
+    config::{AuthMode, Config, secret},
+    passwords,
+};
 use sqlx::PgPool;
 use tokio::sync::Mutex;
 
@@ -49,38 +52,21 @@ type OidcClient = CoreClient<
     EndpointMaybeSet,
 >;
 
-#[derive(clap::Args)]
-pub struct AuthArgs {
-    /// OIDC issuer; its /.well-known/openid-configuration is read at startup.
-    #[arg(long, env = "OIDC_ISSUER")]
-    oidc_issuer: Option<String>,
-    #[arg(long, env = "OIDC_CLIENT_ID")]
-    oidc_client_id: Option<String>,
-    /// Omit for a public client, which relies on PKCE alone.
-    #[arg(long, env = "OIDC_CLIENT_SECRET", hide_env_values = true)]
-    oidc_client_secret: Option<String>,
-    #[arg(long, env = "OIDC_SCOPES", default_value = "openid email profile")]
-    oidc_scopes: String,
-    /// Address users open in the browser, e.g. http://127.0.0.1:8080. The
-    /// redirect URI registered at the provider is <PUBLIC_URL>/api/auth/callback.
-    #[arg(long, env = "PUBLIC_URL")]
-    public_url: Option<String>,
-    #[arg(long, env = "SESSION_HOURS", default_value_t = 12)]
-    session_hours: i32,
-    /// Serve every request as a local superadmin. Only for development and checks.
-    #[arg(long, env = "AUTH_DISABLED")]
-    auth_disabled: bool,
-    /// Sign in with the email and password of a public.admins row instead of OIDC.
-    #[arg(long, env = "DEFAULT_AUTH")]
-    default_auth: bool,
-    /// With DEFAULT_AUTH: while no admin has a password, create a superadmin
-    /// from LOCAL_ADMIN_USER and LOCAL_ADMIN_PASSWORD at startup.
-    #[arg(long, env = "ENABLE_DEFAULT_USER")]
-    enable_default_user: bool,
-    #[arg(long, env = "LOCAL_ADMIN_USER")]
-    local_admin_user: Option<String>,
-    #[arg(long, env = "LOCAL_ADMIN_PASSWORD", hide_env_values = true)]
-    local_admin_password: Option<String>,
+/// The login's secrets, from the environment (.env) rather than config.toml.
+#[derive(Default)]
+pub struct Secrets {
+    /// Password of `auth.default_user`.
+    pub default_user_password: Option<String>,
+    pub oidc_client_secret: Option<String>,
+}
+
+impl Secrets {
+    pub fn from_env() -> Self {
+        Self {
+            default_user_password: secret("DEFAULT_USER_PASSWORD"),
+            oidc_client_secret: secret("OIDC_CLIENT_SECRET"),
+        }
+    }
 }
 
 #[derive(Clone, Serialize, sqlx::FromRow)]
@@ -114,7 +100,7 @@ pub struct Auth {
 
 enum Mode {
     Disabled,
-    /// DEFAULT_AUTH: email and password of a public.admins row.
+    /// Email and password of a public.admins row.
     Password,
     Oidc(Oidc),
 }
@@ -127,66 +113,13 @@ struct Oidc {
     pending: Mutex<HashMap<String, PendingLogin>>,
 }
 
-struct PendingLogin {
-    verifier: PkceCodeVerifier,
-    nonce: Nonce,
-    return_to: String,
-    started: Instant,
-}
-
-impl Auth {
-    pub async fn new(args: AuthArgs, pool: &PgPool) -> Result<Arc<Self>> {
-        if args.auth_disabled {
-            eprintln!("WARNING: authentication is disabled, every request acts as superadmin");
-            return Ok(Arc::new(Self {
-                mode: Mode::Disabled,
-                origin: String::new(),
-                session_hours: 0,
-            }));
-        }
-        let required = |value: Option<String>, name: &str| {
-            value
-                .filter(|value| !value.is_empty())
-                .with_context(|| format!("{name} is required"))
-        };
-        let origin = required(args.public_url, "PUBLIC_URL")?
-            .trim_end_matches('/')
-            .to_owned();
-        anyhow::ensure!(
-            (1..=720).contains(&args.session_hours),
-            "SESSION_HOURS must be between 1 and 720"
-        );
-        if args.default_auth {
-            if args.enable_default_user {
-                create_default_user(pool, args.local_admin_user, args.local_admin_password).await?;
-            }
-            let with_password: i64 = sqlx::query_scalar(
-                r#"SELECT count(*) FROM public.admins WHERE password_hash IS NOT NULL AND "isActive""#,
-            )
-            .fetch_one(pool)
-            .await?;
-            if with_password == 0 {
-                eprintln!(
-                    "WARNING: no active admin has a password yet; add one with \
-                     scripts/auth_user.sh add or set ENABLE_DEFAULT_USER=true"
-                );
-            }
-            eprintln!("Password login enabled (DEFAULT_AUTH)");
-            return Ok(Arc::new(Self {
-                mode: Mode::Password,
-                origin,
-                session_hours: args.session_hours,
-            }));
-        }
-        anyhow::ensure!(
-            !args.enable_default_user,
-            "ENABLE_DEFAULT_USER requires DEFAULT_AUTH=true"
-        );
-        let issuer = args
-            .oidc_issuer
-            .filter(|issuer| !issuer.is_empty())
-            .context("OIDC_ISSUER is required unless DEFAULT_AUTH=true (or AUTH_DISABLED=true for local checks)")?;
-        let client_id = required(args.oidc_client_id, "OIDC_CLIENT_ID")?;
+impl Oidc {
+    async fn discover(
+        settings: &aeza_intelligence::config::Oidc,
+        client_secret: Option<String>,
+        origin: &str,
+    ) -> Result<Self> {
+        let issuer = &settings.issuer;
         // Redirects are not followed, as the openidconnect crate requires.
         let http = reqwest::ClientBuilder::new()
             .redirect(reqwest::redirect::Policy::none())
@@ -212,30 +145,74 @@ impl Auth {
             .context("invalid end_session_endpoint")?;
         let client = CoreClient::from_provider_metadata(
             metadata,
-            ClientId::new(client_id),
-            args.oidc_client_secret
-                .filter(|secret| !secret.is_empty())
-                .map(ClientSecret::new),
+            ClientId::new(settings.client_id.clone()),
+            client_secret.map(ClientSecret::new),
         )
         .set_redirect_uri(RedirectUrl::new(format!("{origin}/api/auth/callback"))?);
         eprintln!("OIDC login enabled with issuer {issuer}");
-        Ok(Arc::new(Self {
-            mode: Mode::Oidc(Oidc {
-                client,
-                http,
-                scopes: args
-                    .oidc_scopes
-                    .split_whitespace()
-                    // authorize_url always requests openid.
-                    .filter(|scope| *scope != "openid")
-                    .map(|scope| Scope::new(scope.to_owned()))
-                    .collect(),
-                end_session,
-                pending: Mutex::new(HashMap::new()),
-            }),
-            origin,
-            session_hours: args.session_hours,
-        }))
+        Ok(Self {
+            client,
+            http,
+            scopes: settings
+                .scopes
+                .iter()
+                // authorize_url always requests openid.
+                .filter(|scope| *scope != "openid")
+                .map(|scope| Scope::new(scope.clone()))
+                .collect(),
+            end_session,
+            pending: Mutex::new(HashMap::new()),
+        })
+    }
+}
+
+struct PendingLogin {
+    verifier: PkceCodeVerifier,
+    nonce: Nonce,
+    return_to: String,
+    started: Instant,
+}
+
+impl Auth {
+    pub async fn new(config: &Config, secrets: Secrets, pool: &PgPool) -> Result<Arc<Self>> {
+        let auth = |mode| {
+            Arc::new(Self {
+                mode,
+                origin: config.origin().to_owned(),
+                session_hours: config.server.session_hours,
+            })
+        };
+        match config.auth.mode {
+            AuthMode::Disabled => {
+                eprintln!("WARNING: authentication is disabled, every request acts as superadmin");
+                Ok(auth(Mode::Disabled))
+            }
+            AuthMode::Password => {
+                let default_user = &config.auth.default_user;
+                if default_user.enabled {
+                    create_default_user(pool, &default_user.login, secrets.default_user_password)
+                        .await?;
+                }
+                let with_password: i64 = sqlx::query_scalar(
+                    r#"SELECT count(*) FROM public.admins WHERE password_hash IS NOT NULL AND "isActive""#,
+                )
+                .fetch_one(pool)
+                .await?;
+                if with_password == 0 {
+                    eprintln!(
+                        "WARNING: no active admin has a password yet; add one with \
+                         scripts/auth_user.sh add or enable [auth.default_user]"
+                    );
+                }
+                eprintln!("Password login enabled");
+                Ok(auth(Mode::Password))
+            }
+            AuthMode::Oidc => {
+                let settings = config.auth.oidc.as_ref().context("[auth.oidc] is missing")?;
+                let oidc = Oidc::discover(settings, secrets.oidc_client_secret, config.origin()).await?;
+                Ok(auth(Mode::Oidc(oidc)))
+            }
+        }
     }
 
     /// The admin behind the request's session cookie, if the session is live.
@@ -452,7 +429,7 @@ pub struct Credentials {
     password: String,
 }
 
-/// DEFAULT_AUTH login: an active admin whose password matches its stored hash.
+/// Password login: an active admin whose password matches its stored hash.
 pub async fn password_login(
     State(auth): State<Arc<Auth>>,
     State(pool): State<PgPool>,
@@ -533,22 +510,13 @@ async fn start_session(pool: &PgPool, admin_id: i64, hours: i32) -> sqlx::Result
     Ok(token)
 }
 
-/// ENABLE_DEFAULT_USER: the first superadmin, created only while no admin has
+/// `auth.default_user`: the first superadmin, created only while no admin has
 /// a password, so changing or removing it later is not undone by a restart.
-async fn create_default_user(
-    pool: &PgPool,
-    user: Option<String>,
-    password: Option<String>,
-) -> Result<()> {
-    let (Some(user), Some(password)) = (
-        user.filter(|value| !value.is_empty()),
-        password.filter(|value| !value.is_empty()),
-    ) else {
-        anyhow::bail!("ENABLE_DEFAULT_USER requires LOCAL_ADMIN_USER and LOCAL_ADMIN_PASSWORD");
-    };
+async fn create_default_user(pool: &PgPool, login: &str, password: Option<String>) -> Result<()> {
+    let password = password.context("[auth.default_user] requires DEFAULT_USER_PASSWORD in .env")?;
     anyhow::ensure!(
         password.chars().count() >= passwords::MIN_LENGTH,
-        "LOCAL_ADMIN_PASSWORD must be at least {} characters",
+        "DEFAULT_USER_PASSWORD must be at least {} characters",
         passwords::MIN_LENGTH
     );
     let has_password: bool = sqlx::query_scalar(
@@ -566,11 +534,11 @@ async fn create_default_user(
            ON CONFLICT (lower(email)) DO UPDATE
              SET role = 'superadmin', "isActive" = true, password_hash = EXCLUDED.password_hash"#,
     )
-    .bind(&user)
+    .bind(login)
     .bind(hash)
     .execute(pool)
     .await?;
-    eprintln!("Created the default superadmin {user} (ENABLE_DEFAULT_USER)");
+    eprintln!("Created the default superadmin {login}");
     Ok(())
 }
 
@@ -808,47 +776,31 @@ mod tests {
         assert!(admin("superadmin").can_edit_settings());
     }
 
-    /// Auth from command-line flags only, ignoring the environment. The pool
-    /// never connects: these configurations fail before the first query.
-    async fn auth(flags: &[&str]) -> Result<Arc<Auth>> {
-        use clap::{CommandFactory, FromArgMatches};
-        #[derive(clap::Parser)]
-        struct Args {
-            #[command(flatten)]
-            auth: AuthArgs,
-        }
-        let matches = Args::command()
-            .mut_args(|arg| arg.env(None::<&'static str>))
-            .try_get_matches_from(std::iter::once("market_api").chain(flags.iter().copied()))?;
+    /// Auth for `[auth]` lines, without OIDC discovery. The pool never
+    /// connects: these configurations fail before the first query.
+    async fn auth(auth: &str, secrets: Secrets) -> Result<Arc<Auth>> {
+        let text = format!("[server]\npublic_url = \"http://127.0.0.1:8080\"\n[auth]\n{auth}");
         let pool = PgPool::connect_lazy("postgres://unused@127.0.0.1:1/unused")?;
-        Auth::new(Args::from_arg_matches(&matches)?.auth, &pool).await
+        Auth::new(&Config::parse(&text)?, secrets, &pool).await
     }
 
     #[tokio::test]
-    async fn refuses_to_start_without_a_complete_login_method() {
+    async fn the_default_user_needs_a_long_enough_secret() {
         let error = |result: Result<Arc<Auth>>| result.err().map(|error| error.to_string());
-        let url = ["--public-url", "http://127.0.0.1:8080"];
-        assert_eq!(error(auth(&[]).await).as_deref(), Some("PUBLIC_URL is required"));
-        assert!(
-            error(auth(&url).await).is_some_and(|e| e.starts_with("OIDC_ISSUER is required unless DEFAULT_AUTH")),
-        );
-        let default_user = [&url[..], &["--enable-default-user"]].concat();
+        let default_user = "mode = \"password\"\n[auth.default_user]\nenabled = true\nlogin = \"admin\"";
         assert_eq!(
-            error(auth(&default_user).await).as_deref(),
-            Some("ENABLE_DEFAULT_USER requires DEFAULT_AUTH=true")
+            error(auth(default_user, Secrets::default()).await).as_deref(),
+            Some("[auth.default_user] requires DEFAULT_USER_PASSWORD in .env")
         );
-        // Compose passes unset variables as empty strings.
-        let unset = [&default_user[..], &["--default-auth", "--local-admin-user=", "--local-admin-password="]].concat();
+        let short = Secrets {
+            default_user_password: Some("short".into()),
+            ..Secrets::default()
+        };
         assert_eq!(
-            error(auth(&unset).await).as_deref(),
-            Some("ENABLE_DEFAULT_USER requires LOCAL_ADMIN_USER and LOCAL_ADMIN_PASSWORD")
+            error(auth(default_user, short).await).as_deref(),
+            Some("DEFAULT_USER_PASSWORD must be at least 16 characters")
         );
-        let short = [&default_user[..], &["--default-auth", "--local-admin-user", "admin", "--local-admin-password", "short"]].concat();
-        assert_eq!(
-            error(auth(&short).await).as_deref(),
-            Some("LOCAL_ADMIN_PASSWORD must be at least 16 characters")
-        );
-        assert!(auth(&["--auth-disabled"]).await.is_ok());
+        assert!(auth("mode = \"disabled\"", Secrets::default()).await.is_ok());
     }
 
     #[test]

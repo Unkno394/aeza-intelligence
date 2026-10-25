@@ -2,3 +2,5 @@
 .local/
 .env
 .DS_Store
+/certs/
+__pycache__/

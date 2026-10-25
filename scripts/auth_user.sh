@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Admin accounts: a row in public.admins decides whether the email may enter
-# and with which role. The password is stored in that row when DEFAULT_AUTH=true
-# (set through the API image, Argon2), otherwise in the bundled Keycloak.
+# and with which role. The password is stored in that row when auth.mode =
+# "password" in config.toml (set through the API image, Argon2), otherwise in
+# the bundled Keycloak.
 #
 #   bash scripts/auth_user.sh add <email> <viewer|operator|superadmin> [name]   asks for the password
 #   bash scripts/auth_user.sh role <email> <viewer|operator|superadmin>
@@ -31,18 +32,23 @@ kcadm() {
 }
 kc_login() {
   if ! docker compose ps --status running --quiet keycloak | grep -q .; then
-    echo 'Keycloak is not running: docker compose up -d keycloak' >&2
+    echo 'Keycloak is not running: docker compose --profile sso up -d keycloak' >&2
     exit 1
   fi
   kcadm config credentials --server http://localhost:8080 --realm master \
-    --user "${KEYCLOAK_ADMIN:-admin}" --password "${KEYCLOAK_ADMIN_PASSWORD:-admin}" >/dev/null 2>&1 ||
-    { echo 'Keycloak admin login failed (KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD)' >&2; exit 1; }
+    --user admin --password "${KEYCLOAK_ADMIN_PASSWORD:-}" >/dev/null 2>&1 ||
+    { echo 'Keycloak admin login failed (KEYCLOAK_ADMIN_PASSWORD)' >&2; exit 1; }
 }
 kc_user_id() {
   kcadm get users -r aeza -q "email=$1" -q exact=true --fields id --format csv --noquotes | head -1
 }
-default_auth() { [[ "${DEFAULT_AUTH:-false}" =~ ^(true|1|yes|on)$ ]]; }
-# DEFAULT_AUTH: hashes the password into public.admins with the API image.
+# auth.mode of config.toml, as the API image reads it.
+auth_mode=
+default_auth() {
+  [[ -n "$auth_mode" ]] || auth_mode="$(docker compose run --rm --no-deps -T migrate config auth.mode 2>/dev/null)"
+  [[ "$auth_mode" == password ]]
+}
+# auth.mode = "password": hashes the password into public.admins with the API image.
 db_set_password() {
   (( ${#password} >= 16 )) || { echo 'the password must be at least 16 characters' >&2; exit 1; }
   printf '%s\n' "$password" |

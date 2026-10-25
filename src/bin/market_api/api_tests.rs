@@ -15,12 +15,12 @@ use std::{
 
 use aeza_intelligence::{
     Dataset,
+    config::{self, AuthMode, Config},
     passwords,
     market::Offer,
     market_store::{ObservationSource, save_offers},
 };
 use axum::{Form, extract::State as AxumState};
-use clap::{CommandFactory, FromArgMatches};
 use futures_util::{SinkExt, StreamExt};
 use openidconnect::{
     Audience, EmptyAdditionalClaims, EndUserEmail, IssuerUrl, JsonWebKeyId, Nonce,
@@ -45,12 +45,6 @@ const FOREIGN: &str = "http://evil.example";
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 // ---------------------------------------------------------------- harness
-
-#[derive(clap::Parser)]
-struct Args {
-    #[command(flatten)]
-    auth: AuthArgs,
-}
 
 enum Mode {
     Oidc,
@@ -146,37 +140,36 @@ type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 impl Api {
     async fn start(pool: PgPool, mode: Mode) -> Self {
-        Self::start_with(pool, mode, &[]).await
+        Self::start_with(pool, mode, Secrets::default(), |_| {}).await
     }
 
-    /// `extra` flags are appended to the ones of `mode`.
-    async fn start_with(pool: PgPool, mode: Mode, extra: &[&str]) -> Self {
+    /// `adjust` changes the configuration that `mode` starts from.
+    async fn start_with(
+        pool: PgPool,
+        mode: Mode,
+        secrets: Secrets,
+        adjust: impl FnOnce(&mut Config),
+    ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let provider = match mode {
             Mode::Oidc => Some(Provider::start().await),
             _ => None,
         };
-        let flags: Vec<String> = match mode {
-            Mode::Oidc => vec![
-                "--oidc-issuer".into(),
-                provider.as_ref().unwrap().issuer.clone(),
-                "--oidc-client-id".into(),
-                CLIENT_ID.into(),
-                "--public-url".into(),
-                base.clone(),
-            ],
-            Mode::Password => vec!["--default-auth".into(), "--public-url".into(), base.clone()],
-            Mode::Disabled => vec!["--auth-disabled".into()],
+        let text = format!("[server]\npublic_url = \"{base}\"\n[auth]\nmode = \"disabled\"");
+        let mut config = Config::parse(&text).unwrap();
+        config.auth.mode = match mode {
+            Mode::Oidc => AuthMode::Oidc,
+            Mode::Password => AuthMode::Password,
+            Mode::Disabled => AuthMode::Disabled,
         };
-        let flags = flags.into_iter().chain(extra.iter().map(|flag| flag.to_string()));
-        // sqlx::test loads .env; the variables there must not change the test setup.
-        let matches = Args::command()
-            .mut_args(|arg| arg.env(None::<&'static str>))
-            .try_get_matches_from(std::iter::once("market_api".to_owned()).chain(flags))
-            .unwrap();
-        let args = Args::from_arg_matches(&matches).unwrap();
-        let auth = Auth::new(args.auth, &pool).await.unwrap();
+        config.auth.oidc = provider.as_ref().map(|provider| config::Oidc {
+            issuer: provider.issuer.clone(),
+            client_id: CLIENT_ID.into(),
+            scopes: vec!["openid".into(), "email".into(), "profile".into()],
+        });
+        adjust(&mut config);
+        let auth = Auth::new(&config, secrets, &pool).await.unwrap();
         let (live, watcher) = Live::start(pool.clone()).await.unwrap();
         let app = router(AppState {
             pool: pool.clone(),
@@ -842,17 +835,26 @@ async fn password_sessions_survive_a_restart_but_not_deactivation(pool: PgPool) 
 
 #[sqlx::test(migrator = "aeza_intelligence::adapter::MIGRATOR")]
 async fn the_default_user_is_created_only_while_no_admin_has_a_password(pool: PgPool) {
-    let default_user = |password: &'static str| {
-        ["--enable-default-user", "--local-admin-user", "admin", "--local-admin-password", password]
+    let start = |pool, password: &str| {
+        let secrets = Secrets {
+            default_user_password: Some(password.into()),
+            ..Secrets::default()
+        };
+        Api::start_with(pool, Mode::Password, secrets, |config| {
+            config.auth.default_user = config::DefaultUser {
+                enabled: true,
+                login: "admin".into(),
+            };
+        })
     };
-    let api = Api::start_with(pool.clone(), Mode::Password, &default_user(PASSWORD)).await;
+    let api = start(pool.clone(), PASSWORD).await;
     let mut browser = Browser::default();
     assert_eq!(api.password_login(&mut browser, "admin", PASSWORD).await, 204);
     assert_eq!(api.get("/api/auth/me", &mut browser).await.json()["role"], "superadmin");
     drop(api);
 
     // The admin exists now: another LOCAL_ADMIN_PASSWORD changes nothing.
-    let api = Api::start_with(pool, Mode::Password, &default_user("another-password-of-length")).await;
+    let api = start(pool, "another-password-of-length").await;
     let mut browser = Browser::default();
     assert_eq!(api.password_login(&mut browser, "admin", "another-password-of-length").await, 401);
     assert_eq!(api.password_login(&mut browser, "admin", PASSWORD).await, 204);

@@ -51,6 +51,15 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  generator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s scripts/given -p 'test_*.py'
+
   compose:
     runs-on: ubuntu-latest
     steps:
@@ -59,5 +68,3 @@ jobs:
         run: docker compose config --quiet
         env:
           DATABASE_URL: postgres://user@127.0.0.1:5432/db
-          KEYCLOAK_ADMIN_PASSWORD: ci
-          SSO_USER_PASSWORD: ci

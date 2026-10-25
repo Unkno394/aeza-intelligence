@@ -6,6 +6,7 @@
 
 pub mod adapter;
 pub mod analysis;
+pub mod config;
 pub mod historical;
 pub mod market;
 pub mod market_store;

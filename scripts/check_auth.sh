@@ -5,9 +5,13 @@
 # cannot: the realm in keycloak/, the Keycloak form and the proxy in front of
 # market_api and the Market Simulator.
 #
+# The check runs the stack with a copy of config.toml set to auth.mode =
+# "oidc" (.local/check-auth.toml) and switches api and frontend back to
+# config.toml afterwards.
+#
 #   bash scripts/check_auth.sh            start keycloak + api + frontend, then check
 #   bash scripts/check_auth.sh --build    the same, rebuilding the images first
-#   bash scripts/check_auth.sh --no-up    check an already running stack
+#   bash scripts/check_auth.sh --no-up    check an already running OIDC stack
 #   bash scripts/check_auth.sh --cleanup  deactivate the test admin
 set -euo pipefail
 
@@ -28,29 +32,23 @@ for arg in "$@"; do
   esac
 done
 
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-fi
-export PUBLIC_URL="http://127.0.0.1:${FRONTEND_PORT:-8080}"
-export KEYCLOAK_PORT="${KEYCLOAK_PORT:-8081}"
-# The API runs against the bundled Keycloak for the check, whatever .env says.
-export KEYCLOAK_URL="http://127.0.0.1:$KEYCLOAK_PORT"
-export OIDC_ISSUER="$KEYCLOAK_URL/realms/aeza" OIDC_CLIENT_ID=aeza-intelligence OIDC_CLIENT_SECRET= \
-  AUTH_DISABLED=false DEFAULT_AUTH=false ENABLE_DEFAULT_USER=false
-export COMPOSE_PROFILES="sso${COMPOSE_PROFILES:+,$COMPOSE_PROFILES}"
 email=auth-e2e@aeza.test
 password='auth-e2e-Passw0rd'
+work="$(mktemp -d)"
 
 if (( up )); then
-  docker compose up -d --wait "${build[@]}" keycloak api frontend
+  mkdir -p .local
+  sed -e 's/^mode[[:space:]]*=.*/mode = "oidc"/' -e 's/^enabled[[:space:]]*=.*/enabled = false/' config.toml >.local/check-auth.toml
+  export AEZA_CONFIG_FILE=.local/check-auth.toml
+  trap 'rm -rf "$work"; echo "Switching api and frontend back to config.toml"; AEZA_CONFIG_FILE= docker compose up -d api frontend >/dev/null 2>&1' EXIT
+  docker compose --profile sso up -d --wait "${build[@]}" keycloak api frontend
+else
+  trap 'rm -rf "$work"' EXIT
 fi
+public_url="$(docker compose run --rm --no-deps -T migrate config server.public_url 2>/dev/null)"
+issuer="$(docker compose run --rm --no-deps -T migrate config auth.oidc.issuer 2>/dev/null)"
 AUTH_USER_PASSWORD="$password" bash scripts/auth_user.sh add "$email" viewer 'Auth e2e' >/dev/null
 
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
 failures=0
 check() {
   if [[ "$2" == "$3" ]]; then
@@ -64,30 +62,31 @@ check() {
 status() {
   local url="$1"
   shift
-  curl -s -o "$work/body" -D "$work/headers" -w '%{http_code}' "$@" "$url"
+  # -k: the certificate may be the self-signed one of the frontend.
+  curl -sk -o "$work/body" -D "$work/headers" -w '%{http_code}' "$@" "$url"
 }
 location() { sed -n 's/^[Ll]ocation: //p' "$work/headers" | tr -d '\r'; }
 
 for _ in {1..60}; do
-  code="$(status "$PUBLIC_URL/api/auth/me" || true)"
+  code="$(status "$public_url/api/auth/me" || true)"
   [[ "$code" == 401 ]] && break
   if [[ "$code" == 200 ]]; then
-    echo 'market_api answers without a session: AUTH_DISABLED is on. Run without --no-up.' >&2
+    echo 'market_api answers without a session: auth.mode is "disabled". Run without --no-up.' >&2
     exit 1
   fi
   sleep 2
 done
 
 echo 'Without a session'
-check '/api/auth/me is 401' "$(status "$PUBLIC_URL/api/auth/me")" 401
-check 'Market Simulator proxy is 401' "$(status "$PUBLIC_URL/api/market/v1/catalog")" 401
+check '/api/auth/me is 401' "$(status "$public_url/api/auth/me")" 401
+check 'Market Simulator proxy is 401' "$(status "$public_url/api/market/v1/catalog")" 401
 
 echo 'Login through the Keycloak form'
 app=(-b "$work/app" -c "$work/app")
 kc=(-b "$work/kc" -c "$work/kc")
-status "$PUBLIC_URL/api/auth/login" "${app[@]}" >/dev/null
+status "$public_url/api/auth/login" "${app[@]}" >/dev/null
 authorize="$(location)"
-check 'login redirects to the Keycloak realm' "${authorize%%/protocol/*}" "$OIDC_ISSUER"
+check 'login redirects to the Keycloak realm' "${authorize%%/protocol/*}" "$issuer"
 form="$(status "$authorize" "${kc[@]}" >/dev/null; grep -o '<form[^>]*id="kc-form-login"[^>]*' "$work/body" | sed -n 's/.*action="\([^"]*\)".*/\1/p' | sed 's/&amp;/\&/g')"
 check 'Keycloak shows its login form' "${form:+found}" found
 check 'a wrong password stays on the form' \
@@ -96,19 +95,19 @@ check 'a wrong password stays on the form' \
 form="$(grep -o '<form[^>]*id="kc-form-login"[^>]*' "$work/body" | sed -n 's/.*action="\([^"]*\)".*/\1/p' | sed 's/&amp;/\&/g')"
 status "$form" "${kc[@]}" --data-urlencode "username=$email" --data-urlencode "password=$password" >/dev/null
 callback="$(location)"
-check 'Keycloak returns to the callback' "${callback%%\?*}" "$PUBLIC_URL/api/auth/callback"
+check 'Keycloak returns to the callback' "${callback%%\?*}" "$public_url/api/auth/callback"
 status "$callback" "${app[@]}" >/dev/null
 check 'the callback opens the app' "$(location)" /
 check '/api/auth/me returns the viewer' \
-  "$(status "$PUBLIC_URL/api/auth/me" "${app[@]}"; grep -o '"role":"[a-z]*"' "$work/body")" '200"role":"viewer"'
-code="$(status "$PUBLIC_URL/api/market/v1/catalog" "${app[@]}")"
+  "$(status "$public_url/api/auth/me" "${app[@]}"; grep -o '"role":"[a-z]*"' "$work/body")" '200"role":"viewer"'
+code="$(status "$public_url/api/market/v1/catalog" "${app[@]}")"
 check 'Market Simulator proxy lets the session through' "$([[ "$code" != 401 ]] && echo yes)" yes
 
 echo 'Logout'
-status "$PUBLIC_URL/api/auth/logout" "${app[@]}" -X POST -H "Origin: $PUBLIC_URL" >/dev/null
+status "$public_url/api/auth/logout" "${app[@]}" -X POST -H "Origin: $public_url" >/dev/null
 logout_url="$(grep -o '"logoutUrl":"[^"]*"' "$work/body" | cut -d'"' -f4)"
-check 'logout returns the Keycloak logout URL' "${logout_url%%/protocol/*}" "$OIDC_ISSUER"
-check 'the session is gone' "$(status "$PUBLIC_URL/api/auth/me" "${app[@]}")" 401
+check 'logout returns the Keycloak logout URL' "${logout_url%%/protocol/*}" "$issuer"
+check 'the session is gone' "$(status "$public_url/api/auth/me" "${app[@]}")" 401
 
 if (( failures )); then
   echo "$failures check(s) failed" >&2

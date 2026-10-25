@@ -3,7 +3,10 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use aeza_intelligence::historical::{BehaviorEvent, HistoricalConfig, HistoricalModel};
+use aeza_intelligence::{
+    config::Config,
+    historical::{BehaviorEvent, HistoricalConfig, HistoricalModel},
+};
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
@@ -18,18 +21,20 @@ const SERVICES_PER_CUSTOMER: i64 = 3;
 struct Args {
     #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
     database_url: String,
-    /// Seconds between changes; 15 is useful for a live demo.
-    #[arg(long, env = "DEMO_STREAM_INTERVAL_SECONDS", default_value_t = 15)]
-    interval_seconds: u64,
+    /// Seconds between changes [default: demo.interval_seconds in config.toml].
+    #[arg(long)]
+    interval_seconds: Option<u64>,
     /// Seed demo rows and emit one change, then exit.
     #[arg(long)]
     once: bool,
-    /// Build a synthetic daily Historical Model profile before live events.
-    #[arg(long, env = "DEMO_REPLAY_DAYS", default_value_t = 0)]
-    replay_days: u32,
-    /// Wall-clock pause per virtual day while replaying history.
-    #[arg(long, env = "DEMO_REPLAY_DELAY_MS", default_value_t = 200)]
-    replay_delay_ms: u64,
+    /// Virtual days of synthetic Historical Model profile built before live
+    /// events, 0 or 31–365 [default: demo.replay_days in config.toml].
+    #[arg(long)]
+    replay_days: Option<u32>,
+    /// Wall-clock pause per virtual day while replaying history
+    /// [default: demo.replay_delay_ms in config.toml].
+    #[arg(long)]
+    replay_delay_ms: Option<u64>,
     /// Exit after historical replay instead of starting the live stream.
     #[arg(long)]
     replay_only: bool,
@@ -38,39 +43,43 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    let demo = Config::load()?.demo;
+    let interval_seconds = args.interval_seconds.unwrap_or(demo.interval_seconds);
+    let replay_days = args.replay_days.unwrap_or(demo.replay_days);
+    let replay_delay_ms = args.replay_delay_ms.unwrap_or(demo.replay_delay_ms);
     ensure!(
-        (2..=3600).contains(&args.interval_seconds),
+        (2..=3600).contains(&interval_seconds),
         "interval must be 2–3600 seconds"
     );
     ensure!(
-        args.replay_days == 0 || (31..=365).contains(&args.replay_days),
-        "replay days must be 31–365"
+        replay_days == 0 || (31..=365).contains(&replay_days),
+        "replay days must be 0 or 31–365"
     );
     ensure!(
-        args.replay_delay_ms <= 10_000,
+        replay_delay_ms <= 10_000,
         "replay delay must be at most 10000 ms"
     );
     ensure!(
-        !args.replay_only || args.replay_days > 0,
-        "--replay-only requires --replay-days"
+        !args.replay_only || replay_days > 0,
+        "--replay-only requires replay days"
     );
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .connect(&args.database_url)
         .await?;
     seed(&pool).await?;
-    if args.replay_days > 0 {
-        replay(&pool, args.replay_days, args.replay_delay_ms).await?;
+    if replay_days > 0 {
+        replay(&pool, replay_days, replay_delay_ms).await?;
     }
     if args.replay_only {
         return Ok(());
     }
-    let mut tick = tokio::time::interval(Duration::from_secs(args.interval_seconds));
+    let mut tick = tokio::time::interval(Duration::from_secs(interval_seconds));
     loop {
         tick.tick().await;
         let slot = chrono::Utc::now()
             .timestamp()
-            .div_euclid(args.interval_seconds as i64);
+            .div_euclid(interval_seconds as i64);
         let customer = slot.rem_euclid(CUSTOMERS);
         let phase = slot.div_euclid(CUSTOMERS).rem_euclid(5);
         emit(&pool, customer, phase).await?;

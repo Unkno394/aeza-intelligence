@@ -43,7 +43,9 @@ GROUP BY source, comparison_group ORDER BY source, comparison_group;"
 
 api_port="${MARKET_CHECK_PORT:-3011}"
 check_dir="$(mktemp -d /tmp/aeza-market-check.XXXXXX)"
-cargo run --quiet --locked --bin market_api -- --listen "127.0.0.1:${api_port}" &
+# This API instance answers the checks below without a login.
+sed -e 's/^mode[[:space:]]*=.*/mode = "disabled"/' -e 's/^enabled[[:space:]]*=.*/enabled = false/' config.toml >"$check_dir/config.toml"
+AEZA_CONFIG="$check_dir/config.toml" cargo run --quiet --locked --bin market_api -- --listen "127.0.0.1:${api_port}" &
 api_pid=$!
 trap 'kill "$api_pid" 2>/dev/null || true' EXIT
 api_ready=0

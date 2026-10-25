@@ -9,71 +9,98 @@ payment behavior. No training data is required before the first observation.
 
 ```sh
 cp .env.example .env
-# Set DATABASE_URL in .env to the existing PostgreSQL on this host,
-# and choose the login: DEFAULT_AUTH=true or OIDC (see Authentication below).
+# In .env: DATABASE_URL of the existing PostgreSQL on this host and
+# DEFAULT_USER_PASSWORD (16+ characters) for the first sign-in as "admin".
 docker compose up -d --build
 ```
 
-Open http://127.0.0.1:8080. Compose uses the existing PostgreSQL, applies migrations, loads
+Open https://127.0.0.1:8080 (`server.public_url` of `config.toml`) and sign in
+as `admin`. Compose uses the existing PostgreSQL, applies migrations, loads
 `scripts/given/data.json` when the client tables are empty, and runs the API, daily
 client snapshots, the competitor tariff and EUR→RUB collector (daily), the
 Market Simulator and the frontend HTTP server. Search interest is collected
 only when `TRENDSMCP_API_KEY` is set in `.env`; the Market Intelligence map
-includes a Google Trends regional CSV for the map. Ports and credentials
-can be overridden in `.env` (see `.env.example`). `docker compose down` stops
+includes a Google Trends regional CSV for the map. `docker compose down` stops
 the application containers; the existing database remains in place.
+
+### Configuration
+
+| Where | What |
+|---|---|
+| `config.toml` | Application settings: public URL, login mode, the default user, OIDC provider, demo stream. Committed; read by `market_api`, `demo_stream`, the frontend and Keycloak. |
+| `.env` | Secrets only: `DATABASE_URL`, `DEFAULT_USER_PASSWORD`, `OIDC_CLIENT_SECRET`, the Keycloak passwords, `TRENDSMCP_API_KEY` (see `.env.example`). Not committed. |
+| `docker-compose.yml` | Infrastructure: the frontend port 8080, Keycloak on 8081, the `sso` and `demo` profiles. |
+
+Compose mounts `config.toml` read-only into the containers that read it;
+after a change run `docker compose up -d api frontend`. Unknown keys and
+invalid values stop the API at startup with the key named, instead of falling
+back to a default. Outside Docker the binaries read `AEZA_CONFIG`, or
+`config.toml` in the working directory. `cargo run --bin aeza_intelligence --
+config auth.mode` prints one checked value (without a key, everything).
 
 ### Authentication
 
 The web UI and every `/api` route, including the `/api/client/ws` WebSocket and
 the Market Simulator behind the frontend proxy, require a session. Access is
 granted to active rows of `public.admins`: `viewer` reads everything;
-`operator` and `superadmin` may also change the Risk Score settings. There are
-two ways to sign in, chosen in `.env`:
+`operator` and `superadmin` may also change the Risk Score settings.
+`auth.mode` in `config.toml` chooses how admins sign in:
 
-- **Password login**, `DEFAULT_AUTH=true`. The login form checks the email and
-  password of a `public.admins` row (Argon2id hash in `password_hash`); no
-  OIDC provider or Keycloak is involved. With `ENABLE_DEFAULT_USER=true` the
-  API creates a `superadmin` from `LOCAL_ADMIN_USER` and `LOCAL_ADMIN_PASSWORD`
-  (16+ characters) at startup while no admin has a password yet, so the first
+- **`password`** (the default). The login form checks the email and password
+  of a `public.admins` row (Argon2id hash in `password_hash`); no OIDC
+  provider or Keycloak is involved. With `[auth.default_user] enabled = true`
+  the API creates a `superadmin` with that `login` and `DEFAULT_USER_PASSWORD`
+  from `.env` at startup while no admin has a password yet, so the first
   sign-in works on an empty database; later changes to that admin are kept.
   Further admins: `scripts/auth_user.sh add` (below).
-- **OIDC** (Authorization Code + PKCE), `DEFAULT_AUTH=false`, the default. The
-  provider only proves the email (`email_verified` must not be false). The
-  Compose stack includes a Keycloak at `http://127.0.0.1:8081`, started with
-  `COMPOSE_PROFILES=sso` (`KEYCLOAK_PORT`; `KEYCLOAK_URL` when it is opened at
-  another address); without `OIDC_ISSUER` the API uses it. Its realm `aeza`,
-  the public PKCE client `aeza-intelligence` and the `analyst@aeza.local`
-  account are imported from `keycloak/aeza-realm.json` on first start. Set
+- **`oidc`** (Authorization Code + PKCE). The provider only proves the email
+  (`email_verified` must not be false); `[auth.oidc]` names it. The default is
+  the bundled Keycloak at `http://127.0.0.1:8081`, started with
+  `docker compose --profile sso up -d`. Its realm `aeza`, the public PKCE
+  client `aeza-intelligence` and the `analyst@aeza.local` account are imported
+  from `keycloak/aeza-realm.json` on first start, and `keycloak/start.sh`
+  points the client's redirect URIs at `server.public_url` on every start. Set
   `KEYCLOAK_ADMIN_PASSWORD` and `SSO_USER_PASSWORD` in `.env`; the SSO button
-  then signs in as `analyst` using `SSO_USER_PASSWORD`. Both are read only when
-  the `keycloak` volume is created. To use another provider instead:
+  then signs in as `analyst` using `SSO_USER_PASSWORD`. Both are read only
+  when the `keycloak` volume is created. To use another provider instead:
 
   1. Register a client at the provider with redirect URI
-     `<PUBLIC_URL>/api/auth/callback` and post-logout redirect URI `<PUBLIC_URL>/`.
-  2. Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (empty for a
-     public client) in `.env`.
+     `<public_url>/api/auth/callback` and post-logout redirect URI `<public_url>/`.
+  2. Set `issuer` and `client_id` in `[auth.oidc]`, and `OIDC_CLIENT_SECRET`
+     in `.env` for a confidential client.
   3. Add the users to `public.admins`; the email is compared case-insensitively:
 
      ```sql
      INSERT INTO public.admins (email, name, role)
      VALUES ('analyst@example.com', 'Analyst', 'viewer');
      ```
+- **`disabled`**: every request acts as a superadmin. Development only; never
+  use it on a reachable host.
 
-If users do not open `http://127.0.0.1:8080`, set `PUBLIC_URL`, and open the
-UI only there: cookies and the Origin check are bound to it. Sessions last
-`SESSION_HOURS` (12 by default) in an HttpOnly, SameSite=Lax cookie (`Secure`
-when `PUBLIC_URL` is https). `public.admin_sessions` stores only SHA-256 hashes
-of the cookie tokens, so sessions survive an API restart, and logout or setting
-`"isActive"` to false ends them on the next request and closes open WebSockets
-within 30 seconds. For local development without a login, start the API with
-`AUTH_DISABLED=true`: every request then acts as a superadmin, so never use it
-on a reachable host.
+Open the UI only at `server.public_url`: cookies and the Origin check are
+bound to it. Sessions last `server.session_hours` (12 by default) in an
+HttpOnly, SameSite=Lax cookie (`Secure` with https). `public.admin_sessions`
+stores only SHA-256 hashes of the cookie tokens, so sessions survive an API
+restart, and logout or setting `"isActive"` to false ends them on the next
+request and closes open WebSockets within 30 seconds.
+
+#### HTTPS
+
+With an `https://` `server.public_url` (the default) the frontend serves HTTPS
+on port 8080 and redirects plain HTTP on that port to `public_url`. The
+certificate is `certs/tls.crt` with the key `certs/tls.key`. When either is
+missing, the frontend generates a self-signed pair at startup for the
+`public_url` host plus `localhost` and `127.0.0.1` (valid 825 days), so the
+browser shows a warning until the certificate is trusted. To use a real
+certificate, put its chain and key there under the same names and run
+`docker compose restart frontend`; files written by the container belong to
+root. Delete both files to have new ones generated, e.g. after changing the
+host in `public_url`. For plain HTTP set `public_url = "http://127.0.0.1:8080"`.
 
 #### Accounts and the login check
 
 `scripts/auth_user.sh` creates the `public.admins` row and the password
-together. With `DEFAULT_AUTH=true` the password is hashed into that row
+together. With `auth.mode = "password"` the password is hashed into that row
 through the API image (`aeza_intelligence set-password`, so build the images
 first); otherwise it goes to the Keycloak account, kept in the `keycloak`
 volume:
@@ -87,17 +114,18 @@ bash scripts/auth_user.sh list
 ```
 
 With OIDC, the Keycloak admin console is at http://127.0.0.1:8081/admin
-(`KEYCLOAK_ADMIN`, `admin` by default, and `KEYCLOAK_ADMIN_PASSWORD`).
+(`admin` and `KEYCLOAK_ADMIN_PASSWORD`).
 An account created there also needs a `public.admins` row (`auth_user.sh role`
 does not create one; use `add`, or the SQL above).
 
 `bash scripts/check_auth.sh` signs in end to end through the real Keycloak
 form and the frontend proxy: the realm in `keycloak/`, the callback, the
-Market Simulator proxy and the Keycloak logout URL. It restarts the API with
-the bundled Keycloak and authentication on, whatever `OIDC_*` and
-`AUTH_DISABLED` say in `.env`; `docker compose up -d api` restarts it with the
-settings from `.env` again. `--no-up` checks an already running stack,
-`--build` rebuilds the images first, `--cleanup` deactivates the test account.
+Market Simulator proxy and the Keycloak logout URL. It runs Keycloak, the API
+and the frontend with a copy of `config.toml` set to `auth.mode = "oidc"`
+(`AEZA_CONFIG_FILE=.local/check-auth.toml`) and switches the API and the
+frontend back to `config.toml` afterwards. `--no-up` checks an already running
+OIDC stack, `--build` rebuilds the images first, `--cleanup` deactivates the
+test account.
 The login rules themselves are covered by `cargo test` (see [Tests](#tests)).
 
 ## Inputs
@@ -219,8 +247,9 @@ cargo run --bin demo_stream -- --once
 cargo run --bin demo_stream -- --replay-days 90 --replay-only
 ```
 
-`DEMO_STREAM_INTERVAL_SECONDS` (2–3600), `DEMO_REPLAY_DAYS` (31–365) and
-`DEMO_REPLAY_DELAY_MS` (0–10000) control the Compose demo. The replay's virtual
+`[demo]` of `config.toml` (`interval_seconds` 2–3600, `replay_days` 0 or
+31–365, `replay_delay_ms` 0–10000) controls the Compose demo; the command-line
+flags of the same names override it. The replay's virtual
 days are historical model test inputs; live Risk Score still uses the current
 accounts, services and transactions. The generator intentionally has no access
 to positive customer IDs.
@@ -232,6 +261,7 @@ export DATABASE_URL=postgres://user:password@127.0.0.1:5433/db   # any server wh
 cargo test                                  # API, models, migrations, snapshot scheduler
 (cd market-simulator && cargo test)
 (cd frontend && npm test && npm run build)
+python3 -m unittest discover -s scripts/given -p 'test_*.py'   # the fixture generator
 ```
 
 Tests that touch PostgreSQL use `#[sqlx::test]`: each gets a new temporary
@@ -245,12 +275,14 @@ push and pull request (`.github/workflows/ci.yml`).
   PKCE. Covered: 401 without a session, the callback, cookie flags, `returnTo`,
   the `forbidden`, `unverified`, `expired`, `denied` and `failed` errors, two
   logins in one browser, the Origin check, roles over the WebSocket, logout,
-  deactivation and expiry, password login (`DEFAULT_AUTH`) with sessions
-  that survive a restart, `ENABLE_DEFAULT_USER`, the client and market routes on
+  deactivation and expiry, password login with sessions that survive a
+  restart, the default user, the client and market routes on
   `scripts/fixtures/data.json`, and that services link only to Aéza tariffs.
 - `tests/model_fixture.rs` runs both models over the 60 generated days of
   `scripts/fixtures/model_history.json`: Historical becomes confident, keeps
   its state through JSON and flags the generated change of the first account.
+- `src/config.rs`: the committed `config.toml` is valid and holds no secrets,
+  and unknown keys or invalid values are reported.
 - `tests/migrations.rs`: versions are unique and without gaps, migrate is
   idempotent and creates every table, every migration after 104 rolls back and
   reapplies, and the fixture loads once into empty tables.
@@ -414,28 +446,22 @@ catalog, collects Contabo, fetches FX, then checks the price and quality APIs.
 
 ### Run and verify the system
 
-The Rust API listens on `127.0.0.1:3000` and serves the three Market routes
-plus client dataset, the `/api/client/ws` live channel, Rust analysis and
-historical snapshots. Vite proxies `/api` (including the WebSocket) to that
-process. The client dashboard uses the PostgreSQL dataset; Risk Score settings
-are stored on the server in `public.client_settings`. Start the existing
-local cluster on the host if it is not already running:
+Docker Compose runs everything (see [Quick start](#quick-start)). To work on
+the code, run single parts on the host against the same database; they read
+`config.toml` from the repository root and the secrets from `.env`:
 
 ```sh
-pg_ctl -D .local/postgres -o '-k /tmp -p 55432 -h 127.0.0.1' -l .local/postgres.log start
 set -a; . ./.env; set +a
 cargo run --bin aeza_intelligence -- migrate
-bash scripts/collect_market.sh
-bash scripts/collect_trends.sh
-cargo run --bin client_snapshot
-cargo run --bin market_api
+bash scripts/collect_market.sh          # competitor tariffs and FX once
+bash scripts/collect_trends.sh          # search interest, needs TRENDSMCP_API_KEY
+cargo run --bin client_snapshot         # one snapshot run
+cargo run --bin market_api              # 127.0.0.1:3000; stop the api container first
 ```
 
-In another terminal, start the frontend with
-`cd frontend && npm run dev`. On Arch Linux, `docker compose up -d --build api
-snapshots` runs the API and daily snapshot scheduler against the same database;
-`docker compose --profile collectors up -d trends` additionally schedules
-TrendsMCP updates when `TRENDSMCP_API_KEY` is set.
+The frontend dev server, `cd frontend && npm run dev`, serves
+http://127.0.0.1:5173 and proxies `/api` (including the WebSocket) to
+`127.0.0.1:3000`, either container or `cargo run`. The API accepts browser
+requests only from `server.public_url`, so the proxy sends that origin in
+place of its own. Run `cargo test` before a commit (see [Tests](#tests)).
 
-This sandbox cannot connect to the host PostgreSQL or external APIs, so live
-row counts and HTTP responses must be checked in the host environment.

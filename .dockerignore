@@ -4,3 +4,4 @@ frontend/dist
 .git
 .env
 .local
+certs
