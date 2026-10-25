@@ -149,6 +149,17 @@ try {
   apiFailures.length = 0; // the initial anonymous /api/auth/me is expected to return 401.
   console.log('PASS: login screen → Keycloak → OIDC callback → authenticated dashboard');
 
+  const unnamedControls = await evaluate(`Array.from(document.querySelectorAll('button, a[href], input, select, textarea'))
+    .filter(element => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden'; })
+    .filter(element => {
+      const labelledBy = element.getAttribute('aria-labelledby');
+      const referencedLabel = labelledBy ? labelledBy.split(/\\s+/).map(id => document.getElementById(id)?.innerText ?? '').join(' ').trim() : '';
+      const name = element.getAttribute('aria-label') || referencedLabel || element.getAttribute('title') || element.labels?.[0]?.innerText || element.innerText || element.getAttribute('placeholder') || '';
+      return !name.trim();
+    }).map(element => ({tag:element.tagName, type:element.getAttribute('type'), className:element.className}));`);
+  assert.deepEqual(unnamedControls, [], `visible primary controls should expose an accessible name: ${JSON.stringify(unnamedControls)}`);
+  console.log('PASS: visible dashboard controls expose accessible names');
+
   const routes = [
     ['/', 'Dashboard'],
     ['/snapshot', 'Snapshot Model'],
@@ -253,6 +264,15 @@ try {
   await evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.innerText.includes('Сохранить изменения')).click()`);
   await waitFor(`document.querySelector('.settings-feedback.status')?.innerText.includes('Настройки сохранены')`, 'settings save confirmation', 45000);
   console.log('PASS: settings form saves through the authenticated live API');
+
+  await evaluate(`(() => {
+    window.confirm = () => true;
+    Array.from(document.querySelectorAll('button')).find(button => button.innerText.includes('Восстановить по умолчанию'))?.click();
+  })()`);
+  await waitFor(`Number(document.querySelector('input[aria-label="Услуги без автопродления: вес"]')?.value) === 15`, 'recommended default model weights');
+  await evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.innerText.includes('Сохранить изменения'))?.click()`);
+  await waitFor(`document.querySelector('.settings-feedback.status')?.innerText.includes('Настройки сохранены')`, 'default settings save confirmation', 45000);
+  console.log('PASS: model settings restore to defaults and persist through the API');
 
   const socketsBeforeReconnect = await evaluate(`window.__aezaTestWebSockets?.length ?? 0`);
   const snapshotsBeforeReconnect = await evaluate(`window.__aezaTestSnapshotCount ?? 0`);

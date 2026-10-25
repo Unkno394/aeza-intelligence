@@ -394,10 +394,14 @@ async fn required_v1_api_auth_customer_settings_snapshot_and_docs_contract() {
         existing, 0,
         "V1_API_TEST_DATABASE_URL must be empty; refusing to replace existing data"
     );
-    adapter
-        .replace(&fixture_for(&[2, 10, 11, 100]))
-        .await
-        .unwrap();
+    let mut initial_fixture = fixture_for(&[2, 10, 11, 100]);
+    initial_fixture
+        .services
+        .retain(|service| service.owner_id != 100);
+    initial_fixture
+        .transactions
+        .retain(|transaction| transaction.service_id != 100);
+    adapter.replace(&initial_fixture).await.unwrap();
     pool.close().await;
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -545,6 +549,31 @@ async fn required_v1_api_auth_customer_settings_snapshot_and_docs_contract() {
         StatusCode::OK,
         "viewer can read customer data"
     );
+
+    // A persisted OIDC session lookup must fail closed when PostgreSQL cannot
+    // read the session table, then work again when the table is restored.
+    sqlx::query("ALTER TABLE public.admin_sessions RENAME TO aeza_v1_api_sessions_unavailable")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let session_lookup_failure = get(&client, &base, "/api/v1/auth/me", &viewer_cookie)
+        .await
+        .status();
+    sqlx::query(
+        "ALTER TABLE public.aeza_v1_api_sessions_unavailable RENAME TO admin_sessions",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(session_lookup_failure, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        get(&client, &base, "/api/v1/auth/me", &viewer_cookie)
+            .await
+            .status(),
+        StatusCode::OK,
+        "session authentication recovers after the database relation is restored"
+    );
+
     assert_eq!(
         patch_json(
             &client,
@@ -798,6 +827,15 @@ async fn required_v1_api_auth_customer_settings_snapshot_and_docs_contract() {
     assert_eq!(detail["services"][0]["status"], "active");
     assert_eq!(detail["transactions"][0]["status"], "performed");
     assert_eq!(detail["transactions"][0]["type"], "order");
+    let sparse_customer: Value = get(&client, &base, "/api/v1/customers/100", &cookie)
+        .await
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(sparse_customer["services"], json!([]));
+    assert_eq!(sparse_customer["transactions"], json!([]));
     let status_detail: Value = get(&client, &base, "/api/v1/customers/2", &cookie)
         .await
         .error_for_status()
@@ -915,9 +953,34 @@ async fn required_v1_api_auth_customer_settings_snapshot_and_docs_contract() {
     assert_eq!(snapshot.as_array().unwrap().len(), 4);
     for assessment in snapshot.as_array().unwrap() {
         assert!((0..=100).contains(&assessment["score"].as_i64().unwrap()));
-        assert_eq!(assessment["assessmentStatus"], "sufficient_data");
+        if assessment["accountId"] == "100" {
+            assert_eq!(assessment["assessmentStatus"], "insufficient_data");
+        } else {
+            assert_eq!(assessment["assessmentStatus"], "sufficient_data");
+        }
         assert_eq!(assessment["settingsVersion"], 0);
     }
+    let listed_after_snapshot: Value = get(
+        &client,
+        &base,
+        "/api/v1/customers?sort=id&limit=10",
+        &cookie,
+    )
+    .await
+    .error_for_status()
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let sparse_list_item = listed_after_snapshot["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["account"]["id"] == 100)
+        .expect("the sparse customer remains visible in the customer table");
+    assert_eq!(sparse_list_item["risk"]["assessmentStatus"], "insufficient_data");
+    assert_eq!(sparse_list_item["risk"]["level"], "insufficient");
+    assert!((0..=100).contains(&sparse_list_item["risk"]["score"].as_i64().unwrap()));
     let repeated_snapshot: Value = post_json(
         &client,
         format!("{base}/api/client/snapshot"),
@@ -1508,6 +1571,53 @@ async fn required_v1_api_auth_customer_settings_snapshot_and_docs_contract() {
         assert_eq!(current_risk["level"], expected_level);
     }
 
+    // Change and persist each coefficient separately. Every update advances
+    // the version and republishes risks calculated with that configuration.
+    let mut current_settings = updated["settings"].clone();
+    let mut current_version = 1_i64;
+    for field in [
+        "paymentCoverage",
+        "noAutoProlong",
+        "prolongWait",
+        "failedProlong",
+        "expiringRevenue",
+        "priceRisk",
+    ] {
+        let old_weight = current_settings["weights"][field].as_f64().unwrap();
+        current_settings["weights"][field] = json!(old_weight + 1.0);
+        let saved: Value = patch_json(
+            &client,
+            format!("{base}/api/v1/model/settings"),
+            Some(&cookie),
+            &current_settings,
+        )
+        .await
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+        current_version += 1;
+        assert_eq!(saved["settings"]["weights"][field], old_weight + 1.0);
+        assert_eq!(saved["metadata"]["version"], current_version);
+        current_settings = saved["settings"].clone();
+    }
+    let rescored_weights: Value = get(
+        &client,
+        &base,
+        "/api/v1/customers?sort=id&limit=10",
+        &cookie,
+    )
+    .await
+    .error_for_status()
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert!(rescored_weights["items"].as_array().unwrap().iter().all(|customer| {
+        customer["risk"]["settingsVersion"] == current_version
+    }));
+
     let metrics = get(&client, &base, "/metrics", &cookie).await;
     assert_eq!(metrics.status(), StatusCode::OK);
     assert!(
@@ -1617,7 +1727,7 @@ async fn required_v1_api_auth_customer_settings_snapshot_and_docs_contract() {
         .await
         .unwrap();
     assert_eq!(persisted["settings"]["mediumThreshold"], 40);
-    assert_eq!(persisted["metadata"]["version"], 1);
+    assert_eq!(persisted["metadata"]["version"], 7);
 
     // A settings-history insert failure must roll back the primary settings row
     // and leave the in-memory model unchanged.
@@ -1659,7 +1769,7 @@ async fn required_v1_api_auth_customer_settings_snapshot_and_docs_contract() {
         .await
         .unwrap();
     assert_eq!(after_failed_save["settings"]["mediumThreshold"], 40);
-    assert_eq!(after_failed_save["metadata"]["version"], 1);
+    assert_eq!(after_failed_save["metadata"]["version"], 7);
 
     // Concurrent valid updates serialize into complete, monotonically
     // versioned configurations rather than partially mixed settings.
@@ -1683,7 +1793,7 @@ async fn required_v1_api_auth_customer_settings_snapshot_and_docs_contract() {
         assert_eq!(body["settings"]["highThreshold"], 65);
     }
     versions.sort_unstable();
-    assert_eq!(versions, [2, 3, 4, 5]);
+    assert_eq!(versions, [8, 9, 10, 11]);
     let after_concurrent_updates: Value = get(&client, &base, "/api/v1/model/settings", &cookie)
         .await
         .error_for_status()
@@ -1691,7 +1801,7 @@ async fn required_v1_api_auth_customer_settings_snapshot_and_docs_contract() {
         .json()
         .await
         .unwrap();
-    assert_eq!(after_concurrent_updates["metadata"]["version"], 5);
+    assert_eq!(after_concurrent_updates["metadata"]["version"], 11);
     assert!(
         (41..=44).contains(
             &after_concurrent_updates["settings"]["mediumThreshold"]
@@ -1700,7 +1810,7 @@ async fn required_v1_api_auth_customer_settings_snapshot_and_docs_contract() {
         )
     );
     let history_versions: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM public.client_settings_history WHERE version BETWEEN 2 AND 5",
+        "SELECT count(*) FROM public.client_settings_history WHERE version BETWEEN 8 AND 11",
     )
     .fetch_one(&pool)
     .await

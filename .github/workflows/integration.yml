@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_soak:
+        description: Run the extended API load and memory soak
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   offline-models:
@@ -97,6 +103,9 @@ jobs:
           docker compose up -d --build --wait keycloak api frontend simulator snapshots market-collector
           bash scripts/check_auth.sh --no-up
           bash scripts/check_performance.sh
+          if [[ "${{ github.event_name }}" == 'workflow_dispatch' && "${{ inputs.run_soak }}" == 'true' ]]; then
+            bash scripts/check_soak.sh
+          fi
           bash scripts/check_compose_stack.sh
           node scripts/browser_acceptance.mjs
 

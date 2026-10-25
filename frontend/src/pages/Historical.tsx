@@ -5,7 +5,7 @@ import { ArrowUpRight, CalendarDays, ChevronDown, CircleAlert, Clock3, History, 
 import { useAnalyzer } from '../hooks/useAnalyzer';
 import { Empty, Panel } from '../components/common';
 import { AccountPicker } from '../components/ui/AccountPicker';
-import { historyInPeriod, selectedHistoryPoint, type HistoricalPeriod } from '../features/historicalView';
+import { historicalChartPoint, historyInPeriod, selectedHistoryPoint, type HistoricalPeriod } from '../features/historicalView';
 import './historical.css';
 
 type MetricDeviation = {
@@ -171,7 +171,12 @@ export default function Historical() {
       .map(point => {
         const metricScores = Object.values(point.assessment.metric_deviations ?? {}).map(item => item.score).filter((value): value is number => value != null);
         const transitionScores = transitionList(point).map(item => item.elapsed_z_score).filter((value): value is number => value != null);
-        return { date: point.observedOn, anomaly: Math.max(0, ...metricScores, ...transitionScores), riskScore: point.assessment.synthetic_replay ? point.assessment.snapshot_risk_score : undefined };
+        return historicalChartPoint(
+          point.observedOn,
+          metricScores,
+          transitionScores,
+          point.assessment.synthetic_replay ? point.assessment.snapshot_risk_score : undefined,
+        );
       });
   }, [points, period]);
   const selectedPoint = selectedHistoryPoint(points, chartPoints.map(row => row.date), selectedDate);

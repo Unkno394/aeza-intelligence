@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { historyInPeriod, selectedHistoryPoint } from './historicalView';
+import { historicalChartPoint, historyInPeriod, selectedHistoryPoint } from './historicalView';
 
 const points = Array.from({ length: 121 }, (_, index) => ({
   observedOn: new Date(Date.UTC(2026, 0, 1 + index)).toISOString().slice(0, 10),
@@ -25,4 +25,15 @@ test('a selected date is retained inside the period and falls back to its latest
 test('empty history and a period with no visible observations have no selected date', () => {
   assert.deepEqual(historyInPeriod([], 90), []);
   assert.equal(selectedHistoryPoint(points, [], points[0]!.observedOn), undefined);
+});
+
+test('synthetic Risk Score remains separate from observed historical anomaly values', () => {
+  assert.deepEqual(
+    historicalChartPoint('2026-10-25', [2, 4], [3, null], 97),
+    { date: '2026-10-25', anomaly: 4, riskScore: 97 },
+  );
+  assert.deepEqual(
+    historicalChartPoint('2026-10-25', [2, 4], [3, null]),
+    { date: '2026-10-25', anomaly: 4, riskScore: undefined },
+  );
 });

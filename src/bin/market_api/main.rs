@@ -3006,6 +3006,97 @@ mod tests {
     }
 
     #[test]
+    fn every_model_weight_changes_its_normalized_factor_contribution() {
+        let client = ClientFeatures {
+            account_id: 1,
+            email: "weights@example.test".into(),
+            services_count: 4,
+            monthly_spend: 1_000.0,
+            short_term_share: Some(0.25),
+            no_auto_prolong_share: Some(0.60),
+            prolong_wait_share: Some(0.30),
+            failed_prolong_share: Some(0.50),
+            expiring_revenue_share: Some(0.40),
+            upcoming_payments: 1_000,
+            spendable_balance: 200,
+            payment_coverage: Some(0.20),
+        };
+        let baseline = SnapshotSettings {
+            weights: SnapshotWeights {
+                payment_coverage: 10.0,
+                no_auto_prolong: 10.0,
+                prolong_wait: 10.0,
+                failed_prolong: 10.0,
+                expiring_revenue: 10.0,
+                price_risk: 10.0,
+            },
+            medium_threshold: 35,
+            high_threshold: 65,
+            renewal_window_days: 14,
+            historical_min_days: 30,
+        };
+        let expected_factor_keys = [
+            ("paymentCoverage", "payment_coverage"),
+            ("noAutoProlongShare", "no_auto_prolong"),
+            ("prolongWaitShare", "prolong_wait"),
+            ("failedProlongShare", "failed_prolong"),
+            ("expiringRevenueShare", "expiring_revenue"),
+            ("priceRisk", "price_risk"),
+        ];
+
+        for (factor_key, weight_field) in expected_factor_keys {
+            let baseline_risk = calculate_snapshot_risk(&client, 0, &baseline, Some(0.80));
+            let baseline_points = baseline_risk
+                .factors
+                .iter()
+                .find(|factor| factor.key == factor_key)
+                .unwrap()
+                .points;
+            let mut updated = SnapshotSettings {
+                weights: SnapshotWeights {
+                    payment_coverage: 10.0,
+                    no_auto_prolong: 10.0,
+                    prolong_wait: 10.0,
+                    failed_prolong: 10.0,
+                    expiring_revenue: 10.0,
+                    price_risk: 10.0,
+                },
+                medium_threshold: 35,
+                high_threshold: 65,
+                renewal_window_days: 14,
+                historical_min_days: 30,
+            };
+            match weight_field {
+                "payment_coverage" => updated.weights.payment_coverage = 60.0,
+                "no_auto_prolong" => updated.weights.no_auto_prolong = 60.0,
+                "prolong_wait" => updated.weights.prolong_wait = 60.0,
+                "failed_prolong" => updated.weights.failed_prolong = 60.0,
+                "expiring_revenue" => updated.weights.expiring_revenue = 60.0,
+                "price_risk" => updated.weights.price_risk = 60.0,
+                _ => unreachable!(),
+            }
+            let updated_risk = calculate_snapshot_risk(&client, 0, &updated, Some(0.80));
+            let updated_points = updated_risk
+                .factors
+                .iter()
+                .find(|factor| factor.key == factor_key)
+                .unwrap()
+                .points;
+            assert_ne!(updated_points, baseline_points, "{factor_key} weight");
+            assert_eq!(
+                updated_risk.score,
+                updated_risk
+                    .factors
+                    .iter()
+                    .map(|factor| factor.points)
+                    .sum::<f64>()
+                    .round() as i64,
+                "{factor_key} keeps the normalized score equal to the factor sum"
+            );
+        }
+    }
+
+    #[test]
     fn live_messages_use_frontend_field_names() {
         let message: ClientMessage = serde_json::from_str(r#"{"type":"updateSettings","requestId":"7","settings":{"weights":{"paymentCoverage":1,"noAutoProlong":1,"prolongWait":1,"failedProlong":1,"expiringRevenue":1},"mediumThreshold":40,"highThreshold":70,"renewalWindowDays":7,"historicalMinDays":30}}"#).unwrap();
         let ClientMessage::UpdateSettings {

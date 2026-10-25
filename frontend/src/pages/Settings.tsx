@@ -9,6 +9,7 @@ import { Button } from '../components/ui/button';
 import { GlassSelect } from '../components/ui/GlassSelect';
 import type { RiskResult, Settings as Config } from '../types';
 import { previewRiskDistribution } from '../features/risk/settingsPreview';
+import { validSettings } from '../features/risk/settingsValidation';
 import { useCurrency } from '../hooks/useCurrency';
 import { convertCurrency, currencyOptions, formatNativeCurrency, type CurrencyCode } from '../features/market/currency';
 import './settings.css';
@@ -27,16 +28,6 @@ const riskLabels = [
   { key: 'medium' as const, label: 'Средний риск', color: '#f2b637' },
   { key: 'high' as const, label: 'Высокий риск', color: '#ec6d70' },
 ];
-
-function validSettings(settings: Config) {
-  const weights = Object.values(settings.weights);
-  return weights.every(value => Number.isInteger(value) && value >= 0 && value <= 100)
-    && weights.reduce((sum, value) => sum + value, 0) - settings.weights.priceRisk > 0
-    && Number.isInteger(settings.mediumThreshold) && settings.mediumThreshold >= 1
-    && Number.isInteger(settings.highThreshold) && settings.highThreshold > settings.mediumThreshold && settings.highThreshold <= 100
-    && Number.isInteger(settings.renewalWindowDays) && settings.renewalWindowDays >= 1 && settings.renewalWindowDays <= 90
-    && Number.isInteger(settings.historicalMinDays) && settings.historicalMinDays >= 7 && settings.historicalMinDays <= 365;
-}
 
 function currentDistribution(risks: Record<string, RiskResult>) {
   const counts = { low: 0, medium: 0, high: 0, limited: 0, insufficient: 0 };

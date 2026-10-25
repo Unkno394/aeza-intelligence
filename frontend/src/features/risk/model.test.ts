@@ -103,6 +103,15 @@ test('empty customers and customers without upcoming payments are not labelled l
   assert.equal(noDue.paymentCoverage,null);
 });
 
+test('a service without an end date creates no invented payment or low-risk assessment',()=>{
+  const missingEndDate=service({renewsAt:undefined as unknown as string});
+  const result=calculateRisk(account,dataset({services:[missingEndDate]}),defaults);
+  assert.equal(result.upcomingCents,0);
+  assert.equal(result.paymentCoverage,null);
+  assert.equal(result.level,'limited');
+  assert.equal(result.assessmentStatus,'limited_data');
+});
+
 test('unknown outcomes do not count as failed prolongs and explanations identify contributing factors',()=>{
   const unknown:Transaction={id:'tx',accountId:account.id,serviceId:'s1',billingType:'prolong',amountCents:1000,type:'payment',status:'unknown',createdAt:asOf};
   const result=calculateRisk(account,dataset({transactions:[unknown]}),defaults);

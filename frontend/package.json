@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
-    "test": "node --import tsx --test src/features/risk/model.test.ts src/features/risk/customerTable.test.ts src/features/risk/settingsPreview.test.ts src/features/historicalView.test.ts src/features/market/scenario.test.ts src/features/market/marketComparison.test.ts src/features/market/tariffFilters.test.ts src/features/priceImpact.test.ts src/features/demoPriceRisk.test.ts src/lib/risk-report-export.test.ts src/services/live.test.ts src/services/liveState.test.ts"
+    "test": "node --import tsx --test src/features/risk/model.test.ts src/features/risk/customerTable.test.ts src/features/risk/settingsPreview.test.ts src/features/risk/settingsValidation.test.ts src/features/historicalView.test.ts src/features/market/scenario.test.ts src/features/market/marketComparison.test.ts src/features/market/tariffFilters.test.ts src/features/priceImpact.test.ts src/features/demoPriceRisk.test.ts src/lib/risk-report-export.test.ts src/services/live.test.ts src/services/liveState.test.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.0",

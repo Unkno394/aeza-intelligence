@@ -47,6 +47,15 @@ async fn simulate_and_validation() {
             .unwrap(),
             StatusCode::UNPROCESSABLE_ENTITY,
         ),
+        (
+            serde_json::to_string(&{
+                let mut s = example();
+                s.aeza_plans[0].monthly_usd = 0.0;
+                s
+            })
+            .unwrap(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
     ] {
         let r = router()
             .oneshot(

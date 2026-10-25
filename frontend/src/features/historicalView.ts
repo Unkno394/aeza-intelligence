@@ -1,5 +1,6 @@
 export type HistoricalDatePoint = { observedOn: string };
 export type HistoricalPeriod = 7 | 30 | 90;
+export type HistoricalChartPoint = { date: string; anomaly: number; riskScore: number | undefined };
 
 /** Keep the selected window anchored to the latest recorded observation. */
 export function historyInPeriod<T extends HistoricalDatePoint>(
@@ -22,4 +23,16 @@ export function selectedHistoryPoint<T extends HistoricalDatePoint>(
   const visible = new Set(visibleDates);
   return points.find(point => point.observedOn === selectedDate && visible.has(point.observedOn))
     ?? points.find(point => point.observedOn === visibleDates.at(-1));
+}
+
+/** Keep synthetic snapshot scores in their own series, separate from observed anomalies. */
+export function historicalChartPoint(
+  observedOn: string,
+  metricScores: readonly (number | null)[],
+  transitionScores: readonly (number | null)[],
+  syntheticRiskScore?: number,
+): HistoricalChartPoint {
+  const observedScores = [...metricScores, ...transitionScores]
+    .filter((score): score is number => score !== null && Number.isFinite(score));
+  return { date: observedOn, anomaly: Math.max(0, ...observedScores), riskScore: syntheticRiskScore };
 }

@@ -139,6 +139,9 @@ fn external_probabilities_and_provenance() {
 #[test]
 fn invalid_inputs_are_errors() {
     let (s, c) = fixture();
+    let mut zero_price = s.clone();
+    zero_price.aeza_plans[0].monthly_usd = 0.0;
+    assert!(simulate(zero_price, c.clone()).is_err());
     let mut bad = s.clone();
     bad.aeza_plans[0].monthly_usd = f64::NAN;
     assert!(simulate(bad, c.clone()).is_err());
