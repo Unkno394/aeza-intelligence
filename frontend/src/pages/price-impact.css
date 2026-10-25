@@ -6,6 +6,7 @@
 .price-impact-intro{display:flex;align-items:flex-start;gap:11px;padding:16px 18px;border:1px solid #8dcfff35;border-radius:12px;background:#9bdfff0b;color:#b9d2e5;font-size:15px;line-height:1.65}
 .price-impact-intro svg{flex:none;color:#8bd5ff;margin-top:2px}
 .price-impact-demo-note{padding:12px 15px;border:1px solid #e8bb7850;border-radius:10px;background:#c7944615;color:#e8ca9e;font-size:14px;line-height:1.55}
+.price-impact-demo-note a{color:#b8e5ff;text-decoration:underline}
 .price-impact-demo-label{color:#e8ca9e;font-size:14px;white-space:nowrap}
 .price-impact-error{padding:14px 16px;border:1px solid #e98d9b66;border-radius:10px;background:#e98d9b12;color:#ffd6dc}
 .price-impact-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}

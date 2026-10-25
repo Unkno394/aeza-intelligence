@@ -2736,7 +2736,10 @@ async fn client_price_impact(
         eprintln!("internal price impact query failed: {error}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    Ok(Json(rows))
+    Ok(Json(rows.into_iter().filter(|row| {
+        row.account_id.parse::<i64>().is_ok_and(|id| id > 0)
+            && !row.account_email.as_deref().unwrap_or("").ends_with("@example.test")
+    }).collect()))
 }
 
 /// Explicit scenario overlay linked to fixture IDs. It never enters live scores.
